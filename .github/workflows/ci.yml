@@ -38,6 +38,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download specs
+        run: bash scripts/download-specs.sh
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Lowercase image name

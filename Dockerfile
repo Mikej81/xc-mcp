@@ -1,20 +1,18 @@
 FROM node:20-alpine AS builder
 
-RUN apk add --no-cache curl unzip bash
-
 WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package.json ./
 RUN npm install
 
-# Copy scripts and download specs
-COPY scripts/ ./scripts/
-RUN bash scripts/download-specs.sh
+# Copy pre-downloaded specs (downloaded outside Docker or via build script)
+COPY f5-api/ ./f5-api/
 
 # Copy source code
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 
 # Build: generate index then compile TypeScript
 RUN npx tsx scripts/build-index.ts

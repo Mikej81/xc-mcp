@@ -9,7 +9,9 @@ echo "Downloading F5 XC OpenAPI specs..."
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
-curl -fsSL -o "$tmp" "$SPEC_URL"
+curl -fsSL --retry 3 --retry-delay 5 \
+  -A "Mozilla/5.0 (compatible; CI/1.0)" \
+  -o "$tmp" "$SPEC_URL"
 
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
