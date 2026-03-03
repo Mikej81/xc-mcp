@@ -1,0 +1,33 @@
+{
+  "name": "f5-xc-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for F5 Distributed Cloud (XC) API",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "download-specs": "bash scripts/download-specs.sh",
+    "build:index": "tsx scripts/build-index.ts",
+    "build:ts": "tsc",
+    "build": "npm run download-specs && npm run build:index && npm run build:ts",
+    "start": "node dist/src/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": ["mcp", "f5", "xc", "distributed-cloud", "volterra", "api", "claude", "chatgpt"],
+  "author": "F5, Inc.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
+  }
+}

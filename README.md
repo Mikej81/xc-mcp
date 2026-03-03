@@ -1,0 +1,278 @@
+# F5 Distributed Cloud (XC) MCP Server
+
+An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants access to the full F5 Distributed Cloud API -- 1,764 endpoints across 18 categories. Works with **Claude Code**, **ChatGPT**, and any MCP-compatible client.
+
+## How It Works
+
+Instead of registering thousands of individual tools, this server exposes **6 smart tools** that let an AI discover, explore, and call any F5 XC API endpoint:
+
+| Tool | What It Does |
+|------|--------------|
+| `xc_discover_apis` | Search/browse API operations by keyword, category, HTTP method |
+| `xc_get_operation_details` | Get full parameter and schema details for any operation |
+| `xc_call_api` | Execute any F5 XC API call |
+| `xc_list_namespaces` | Quick-list all namespaces in your tenant |
+| `xc_list_resources` | Quick-list resources of a type in a namespace |
+| `xc_list_tenants` | List all configured tenants and their URLs |
+
+**Typical workflow:** The AI calls `xc_discover_apis` to find relevant endpoints > `xc_get_operation_details` to understand the schema > `xc_call_api` to make the actual request.
+
+## Prerequisites
+
+- An **F5 Distributed Cloud** account
+- An **API Token** -- create one in XC Console > Administration > Personal Management > Credentials > "Add Credentials" > select "API Token"
+- Your **Tenant URL** -- looks like `https://your-tenant.console.ves.volterra.io` (visible in your browser when logged into XC Console)
+- **Docker** (recommended) or **Node.js 20+**
+
+## Transport Modes
+
+The server supports two transport modes:
+
+| Mode | Set via | Used by | How it works |
+|------|---------|---------|--------------|
+| **stdio** (default) | `MCP_TRANSPORT=stdio` or unset | Claude Code | Client spawns the server as a subprocess, communicates over stdin/stdout |
+| **http** | `MCP_TRANSPORT=http` | ChatGPT, remote clients | Server listens on HTTP (default port 3000), clients connect to `/mcp` |
+
+---
+
+## Setup: Claude Code
+
+Claude Code uses **stdio** mode. It launches the server as a subprocess -- no ports, no background processes.
+
+### Option A: Docker (recommended)
+
+```bash
+# 1. Build the image
+docker build -t f5-xc-mcp .
+
+# 2. Register with Claude Code
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","f5-xc-mcp"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+
+# 3. Verify -- start Claude Code and type /mcp
+```
+
+Replace `YOUR_API_TOKEN_HERE` with your actual API token, and update the tenant URL.
+
+**What `--scope user` means:** The server will be available in all your Claude Code sessions, not just the current project.
+
+### Option B: Node.js
+
+```bash
+# 1. Build
+npm install && npm run build
+
+# 2. Register with Claude Code
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"node","args":["/absolute/path/to/xc-mcp-container/dist/src/index.js"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+```
+
+### Option C: Project-scoped config file
+
+Create `.mcp.json` in your project root to share the setup with a team:
+
+```json
+{
+  "mcpServers": {
+    "f5-xc": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "XC_API_TOKEN", "-e", "XC_TENANT_URL", "f5-xc-mcp"],
+      "env": {
+        "XC_API_TOKEN": "YOUR_API_TOKEN_HERE",
+        "XC_TENANT_URL": "https://your-tenant.console.ves.volterra.io"
+      }
+    }
+  }
+}
+```
+
+### Managing the server
+
+```bash
+claude mcp list          # See all registered servers
+claude mcp remove f5-xc  # Remove this server
+/mcp                     # View status inside Claude Code
+```
+
+---
+
+## Setup: ChatGPT
+
+ChatGPT connects to MCP servers over **HTTP**. You need to run the server where ChatGPT can reach it (a public URL or a tunnel).
+
+### Step 1: Start the server in HTTP mode
+
+**Docker:**
+```bash
+docker run --rm -p 3000:3000 \
+  -e MCP_TRANSPORT=http \
+  -e MCP_HTTP_PORT=3000 \
+  -e XC_API_TOKEN=YOUR_API_TOKEN_HERE \
+  -e XC_TENANT_URL=https://your-tenant.console.ves.volterra.io \
+  f5-xc-mcp
+```
+
+**Node.js:**
+```bash
+MCP_TRANSPORT=http XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.io node dist/src/index.js
+```
+
+The server starts on `http://localhost:3000/mcp`.
+
+### Step 2: Expose the server publicly
+
+ChatGPT needs a public HTTPS URL. For development, use a tunnel:
+
+```bash
+# Using ngrok
+ngrok http 3000
+
+# Using Cloudflare Tunnel
+cloudflared tunnel --url http://localhost:3000
+```
+
+This gives you a URL like `https://abc123.ngrok.app`.
+
+### Step 3: Connect in ChatGPT
+
+1. Open ChatGPT > **Settings** > **Connectors** > **Advanced settings** > enable **Developer Mode**
+2. Go to **Settings** > **Connectors** > click **Create**
+3. Enter:
+   - **Name:** F5 XC
+   - **Description:** F5 Distributed Cloud API
+   - **Connector URL:** `https://abc123.ngrok.app/mcp` (your tunnel URL + `/mcp`)
+4. Save and start chatting
+
+### Docker Compose (recommended for persistent setup)
+
+```yaml
+services:
+  f5-xc-mcp:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HTTP_PORT: 3000
+      XC_API_TOKEN: ${XC_API_TOKEN}
+      XC_TENANT_URL: ${XC_TENANT_URL}
+    restart: unless-stopped
+```
+
+```bash
+# Create .env file (git-ignored) with your credentials
+echo 'XC_API_TOKEN=your-token' >> .env
+echo 'XC_TENANT_URL=https://your-tenant.console.ves.volterra.io' >> .env
+
+docker compose up -d
+```
+
+---
+
+## Multiple Tenants
+
+Use named environment variables to configure multiple tenants:
+
+```bash
+XC_TENANT_PROD_URL=https://prod.console.ves.volterra.io
+XC_TENANT_PROD_TOKEN=your-prod-api-token
+XC_TENANT_DEV_URL=https://dev.console.ves.volterra.io
+XC_TENANT_DEV_TOKEN=your-dev-api-token
+```
+
+The naming convention is `XC_TENANT_<NAME>_URL` and `XC_TENANT_<NAME>_TOKEN`. Both are required for each tenant.
+
+When one tenant is configured, the `tenant` parameter is optional (auto-selected). When multiple tenants are configured, the `tenant` parameter is required -- use `xc_list_tenants` to see available names.
+
+**Claude Code with multiple tenants:**
+```bash
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_TENANT_PROD_URL","-e","XC_TENANT_PROD_TOKEN","-e","XC_TENANT_DEV_URL","-e","XC_TENANT_DEV_TOKEN","f5-xc-mcp"],"env":{"XC_TENANT_PROD_URL":"https://prod.console.ves.volterra.io","XC_TENANT_PROD_TOKEN":"abc123","XC_TENANT_DEV_URL":"https://dev.console.ves.volterra.io","XC_TENANT_DEV_TOKEN":"def456"}}'
+```
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `XC_API_TOKEN` | Yes* | -- | API token (single-tenant mode) |
+| `XC_TENANT_URL` | Yes* | -- | Tenant URL (single-tenant mode) |
+| `XC_TENANT_<NAME>_URL` | Yes* | -- | Named tenant URL (multi-tenant mode) |
+| `XC_TENANT_<NAME>_TOKEN` | Yes* | -- | Named tenant token (multi-tenant mode) |
+| `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
+| `MCP_HTTP_PORT` | No | `3000` | HTTP port (only used when `MCP_TRANSPORT=http`) |
+
+*Either single-tenant (`XC_API_TOKEN` + `XC_TENANT_URL`) or multi-tenant (`XC_TENANT_<NAME>_URL` + `XC_TENANT_<NAME>_TOKEN`) variables are required.
+
+---
+
+## Example Interactions
+
+Once connected, just ask in plain language:
+
+**Basic inventory:**
+- *"List all namespaces in my XC tenant"*
+- *"Show me all HTTP load balancers in the default namespace"*
+- *"What origin pools exist in namespace default?"*
+
+**Configuration inspection:**
+- *"Get the full configuration of my load balancer named 'prod-web'"*
+- *"What API endpoints are available for managing DNS zones?"*
+- *"Show me the WAF policy attached to my keepalive LB"*
+
+**Cross-referencing and auditing:**
+- *"Show me orphaned objects in my tenant"* -- the AI cross-references LBs, origin pools, WAFs, and healthchecks to find unreferenced resources
+- *"Which origin pools aren't used by any load balancer?"*
+- *"List all load balancers that have no origin pools configured"*
+
+**Configuration changes:**
+- *"Add a WAF policy to my existing load balancer"*
+- *"Create an HTTP load balancer called my-app that routes to 10.0.0.1:8080"*
+- *"Delete the load balancer named 'test-lb' from namespace staging"*
+
+**Multi-tenant:**
+- *"Show namespaces in the prod tenant"*
+- *"Compare load balancers between prod and dev"*
+
+## API Categories
+
+The server indexes 1,764 operations across these categories:
+
+| Category | Description |
+|----------|-------------|
+| AI/ML | AI assistant and ML data endpoints |
+| API Security | API definitions, discovery, groups, endpoints |
+| Billing | Usage and billing |
+| Bot Protection | Bot defense and client-side defense |
+| Certificates | Certificate and CA list management |
+| Cloud Sites | AWS VPC/TGW, Azure VNET, GCP VPC, AppStack sites |
+| DDoS Protection | DDoS mitigation and fast ACLs |
+| DNS | DNS zones, domains, load balancers |
+| IAM | Users, roles, API credentials, tenants |
+| Load Balancing | HTTP/TCP load balancers, origin pools, healthchecks |
+| Monitoring | Alerts, logs, audit |
+| Networking | Virtual networks, network policies, BGP, tunnels |
+| Operations | Stored objects, secrets, terraform, introspection |
+| Security | App firewalls, service policies, rate limiters |
+| Support | Support tickets |
+
+## Development
+
+```bash
+npm install          # Install dependencies
+npm run build:index  # Parse all 268 OpenAPI specs into searchable index
+npm run build:ts     # Compile TypeScript
+npm run build        # Both of the above
+npm test             # Run unit tests
+npm run test:watch   # Run tests in watch mode
+
+# Run in dev mode (no compile step needed)
+XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.io npm run dev
+```
+
+## Architecture
+
+- **Build time:** `scripts/build-index.ts` parses all 268 OpenAPI spec files > generates `data/operations-index.json` (searchable index)
+- **Runtime:** Index loads into memory. Full schemas resolved on-demand from original spec files when `xc_get_operation_details` is called (depth-limited `$ref` resolution)
+- **Auth:** All API calls include `Authorization: APIToken <token>` automatically
+- **Safety:** Responses truncated at 50KB to prevent overwhelming the AI context window
+- **Transports:** stdio (subprocess, used by Claude Code) and Streamable HTTP (remote, used by ChatGPT)
