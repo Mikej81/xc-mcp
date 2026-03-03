@@ -42,16 +42,21 @@ Claude Code uses **stdio** mode. It launches the server as a subprocess -- no po
 ### Option A: Docker (recommended)
 
 ```bash
-# 1. Build the image
-docker build -t f5-xc-mcp .
+# 1. Authenticate with GHCR (one-time setup -- use a GitHub PAT with read:packages scope)
+echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 
-# 2. Register with Claude Code
-claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","f5-xc-mcp"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+# 2. Pull the image
+docker pull ghcr.io/mikej81/xc-mcp:latest
 
-# 3. Verify -- start Claude Code and type /mcp
+# 3. Register with Claude Code
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","ghcr.io/mikej81/xc-mcp:latest"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+
+# 4. Verify -- start Claude Code and type /mcp
 ```
 
 Replace `YOUR_API_TOKEN_HERE` with your actual API token, and update the tenant URL.
+
+**To build locally instead:** `docker build -t f5-xc-mcp .` then use `f5-xc-mcp` in place of `ghcr.io/mikej81/xc-mcp:latest` above.
 
 **What `--scope user` means:** The server will be available in all your Claude Code sessions, not just the current project.
 
@@ -75,7 +80,7 @@ Create `.mcp.json` in your project root to share the setup with a team:
     "f5-xc": {
       "type": "stdio",
       "command": "docker",
-      "args": ["run", "--rm", "-i", "-e", "XC_API_TOKEN", "-e", "XC_TENANT_URL", "f5-xc-mcp"],
+      "args": ["run", "--rm", "-i", "-e", "XC_API_TOKEN", "-e", "XC_TENANT_URL", "ghcr.io/mikej81/xc-mcp:latest"],
       "env": {
         "XC_API_TOKEN": "YOUR_API_TOKEN_HERE",
         "XC_TENANT_URL": "https://your-tenant.console.ves.volterra.io"
@@ -108,7 +113,7 @@ docker run --rm -p 3000:3000 \
   -e MCP_HTTP_PORT=3000 \
   -e XC_API_TOKEN=YOUR_API_TOKEN_HERE \
   -e XC_TENANT_URL=https://your-tenant.console.ves.volterra.io \
-  f5-xc-mcp
+  ghcr.io/mikej81/xc-mcp:latest
 ```
 
 **Node.js:**
@@ -147,7 +152,7 @@ This gives you a URL like `https://abc123.ngrok.app`.
 ```yaml
 services:
   f5-xc-mcp:
-    build: .
+    image: ghcr.io/mikej81/xc-mcp:latest
     ports:
       - "3000:3000"
     environment:
@@ -185,7 +190,7 @@ When one tenant is configured, the `tenant` parameter is optional (auto-selected
 
 **Claude Code with multiple tenants:**
 ```bash
-claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_TENANT_PROD_URL","-e","XC_TENANT_PROD_TOKEN","-e","XC_TENANT_DEV_URL","-e","XC_TENANT_DEV_TOKEN","f5-xc-mcp"],"env":{"XC_TENANT_PROD_URL":"https://prod.console.ves.volterra.io","XC_TENANT_PROD_TOKEN":"abc123","XC_TENANT_DEV_URL":"https://dev.console.ves.volterra.io","XC_TENANT_DEV_TOKEN":"def456"}}'
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_TENANT_PROD_URL","-e","XC_TENANT_PROD_TOKEN","-e","XC_TENANT_DEV_URL","-e","XC_TENANT_DEV_TOKEN","ghcr.io/mikej81/xc-mcp:latest"],"env":{"XC_TENANT_PROD_URL":"https://prod.console.ves.volterra.io","XC_TENANT_PROD_TOKEN":"abc123","XC_TENANT_DEV_URL":"https://dev.console.ves.volterra.io","XC_TENANT_DEV_TOKEN":"def456"}}'
 ```
 
 ---
@@ -258,12 +263,13 @@ The server indexes 1,764 operations across these categories:
 ## Development
 
 ```bash
-npm install          # Install dependencies
-npm run build:index  # Parse all 268 OpenAPI specs into searchable index
-npm run build:ts     # Compile TypeScript
-npm run build        # Both of the above
-npm test             # Run unit tests
-npm run test:watch   # Run tests in watch mode
+npm install              # Install dependencies
+npm run download-specs   # Download 268 OpenAPI specs from F5
+npm run build:index      # Parse specs into searchable index
+npm run build:ts         # Compile TypeScript
+npm run build            # All of the above (download + index + compile)
+npm test                 # Run unit tests
+npm run test:watch       # Run tests in watch mode
 
 # Run in dev mode (no compile step needed)
 XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.io npm run dev
