@@ -56,9 +56,19 @@ claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args
 
 Replace `YOUR_API_TOKEN_HERE` with your actual API token, and update the tenant URL.
 
-**To build locally instead:** `docker build -t f5-xc-mcp .` then use `f5-xc-mcp` in place of `ghcr.io/mikej81/xc-mcp:latest` above.
-
 **What `--scope user` means:** The server will be available in all your Claude Code sessions, not just the current project.
+
+### Option A (alternative): Build Docker image locally
+
+```bash
+# 1. Clone and build
+git clone https://github.com/Mikej81/xc-mcp.git
+cd xc-mcp
+docker build -t f5-xc-mcp .
+
+# 2. Register with Claude Code
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","f5-xc-mcp"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+```
 
 ### Option B: Node.js
 
