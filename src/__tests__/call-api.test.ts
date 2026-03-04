@@ -7,9 +7,16 @@ vi.mock("../lib/api-client.js", () => ({
   callApi: vi.fn(),
 }));
 
+// Mock pem-encoding (now async)
+vi.mock("../lib/pem-encoding.js", () => ({
+  encodePemFields: vi.fn((_config, _path, body) => Promise.resolve(body)),
+}));
+
 import { callApi } from "../lib/api-client.js";
+import { encodePemFields } from "../lib/pem-encoding.js";
 
 const mockCallApi = callApi as ReturnType<typeof vi.fn>;
+const mockEncodePemFields = encodePemFields as ReturnType<typeof vi.fn>;
 
 const config: TenantConfig = {
   name: "test",
@@ -73,6 +80,27 @@ describe("handleCallApi", () => {
       queryParams: { limit: "10" },
       body: { name: "new-item" },
     });
+  });
+
+  it("passes config to encodePemFields", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {},
+    });
+
+    await handleCallApi(config, {
+      method: "POST",
+      path: "/api/config/namespaces/default/certificates",
+      body: { spec: { certificate_url: "some-pem" } },
+    });
+
+    expect(mockEncodePemFields).toHaveBeenCalledWith(
+      config,
+      "/api/config/namespaces/default/certificates",
+      { spec: { certificate_url: "some-pem" } },
+    );
   });
 
   it("truncates output > 60KB", async () => {

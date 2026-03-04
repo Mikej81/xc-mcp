@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.0.4 -- 2026-03-04
+
+### Default namespace configuration
+
+- **Default namespace** -- configure a default namespace via `XC_DEFAULT_NAMESPACE` (single-tenant) or `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` (multi-tenant) so most operations can skip the namespace parameter
+- `xc_list_resources` namespace parameter is now **optional** -- falls back to the configured default, or returns a guidance message prompting the user to specify one
+- `xc_call_api` description updated to note default namespace availability
+- New `resolveNamespace()` helper follows the same pattern as `resolveTenant()`
+- **Unit tests** -- 119 tests across 13 test files (up from 108/13), covering env var parsing and namespace resolution logic
+
+## 0.0.3 -- 2026-03-04
+
+### Blindfold encryption for private keys
+
+- **Automatic blindfold encryption** -- raw PEM private keys in certificate API calls are now blindfold-encrypted before transmission
+- Private keys sent via `clear_secret_info.url` are automatically encrypted and moved to `blindfold_secret_info.location` -- the cleartext is never sent to the API
+- Private keys placed directly in `blindfold_secret_info.location` are also encrypted in place
+- Certificate PEM values (`certificate_url`) continue to use simple base64 encoding
+- `encodePemFields` is now async and accepts `TenantConfig` to fetch encryption parameters from the tenant's secret management API
+- New `src/lib/blindfold.ts` module with `fetchBlindfoldParams()` and `blindfoldEncrypt()` functions
+- **Unit tests** -- 108 tests across 13 test files (up from 87/11), including blindfold crypto tests with binary bundle structure validation
+
 ## 0.0.2 -- 2026-03-03
 
 ### Github Actions plugged in

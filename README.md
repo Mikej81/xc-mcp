@@ -205,6 +205,25 @@ claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args
 
 ---
 
+## Default Namespace
+
+Most F5 XC API operations are scoped to a namespace. You can configure a default namespace so you don't have to specify it on every call.
+
+**Single tenant:**
+```bash
+XC_DEFAULT_NAMESPACE=my-namespace
+```
+
+**Multi-tenant:** use `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` per tenant:
+```bash
+XC_TENANT_PROD_DEFAULT_NAMESPACE=production
+XC_TENANT_DEV_DEFAULT_NAMESPACE=dev-sandbox
+```
+
+When a default namespace is configured, the `namespace` parameter becomes optional on `xc_list_resources`. An explicit namespace always takes priority over the default. If no namespace is provided and no default is configured, the server returns a guidance message asking the user to specify one.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -213,6 +232,8 @@ claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args
 | `XC_TENANT_URL` | Yes* | -- | Tenant URL (single-tenant mode) |
 | `XC_TENANT_<NAME>_URL` | Yes* | -- | Named tenant URL (multi-tenant mode) |
 | `XC_TENANT_<NAME>_TOKEN` | Yes* | -- | Named tenant token (multi-tenant mode) |
+| `XC_DEFAULT_NAMESPACE` | No | -- | Default namespace (single-tenant mode) |
+| `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` | No | -- | Default namespace (multi-tenant mode) |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only used when `MCP_TRANSPORT=http`) |
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { handleListResources } from "../tools/list-resources.js";
+import { resolveNamespace } from "../lib/tenant.js";
 import type { TenantConfig } from "../types/index.js";
 
 vi.mock("../lib/api-client.js", () => ({
@@ -14,6 +15,11 @@ const config: TenantConfig = {
   name: "test",
   apiToken: "tok",
   tenantUrl: "https://test.ves.volterra.io",
+};
+
+const configWithDefault: TenantConfig = {
+  ...config,
+  defaultNamespace: "my-default",
 };
 
 describe("handleListResources", () => {
@@ -116,5 +122,52 @@ describe("handleListResources", () => {
     expect(text).toContain("Error listing http_loadbalancers");
     expect(text).toContain("404");
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("namespace resolution with handleListResources", () => {
+  it("uses default namespace when none provided", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "res1" }] },
+    });
+
+    const ns = resolveNamespace(configWithDefault);
+    expect(ns).toBe("my-default");
+
+    const result = await handleListResources(configWithDefault, {
+      namespace: ns as string,
+      resource_type: "http_loadbalancers",
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("my-default");
+    expect(text).toContain("res1");
+  });
+
+  it("explicit namespace overrides default", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "res1" }] },
+    });
+
+    const ns = resolveNamespace(configWithDefault, "explicit-ns");
+    expect(ns).toBe("explicit-ns");
+
+    const result = await handleListResources(configWithDefault, {
+      namespace: ns as string,
+      resource_type: "http_loadbalancers",
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("explicit-ns");
+  });
+
+  it("returns guidance when no namespace and no default", () => {
+    const ns = resolveNamespace(config);
+    expect(typeof ns).toBe("object");
+    expect((ns as { guidance: string }).guidance).toContain("No namespace was specified");
   });
 });

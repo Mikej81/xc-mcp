@@ -56,7 +56,7 @@ export interface ListNamespacesParams {
 }
 
 export interface ListResourcesParams {
-  namespace: string;
+  namespace?: string;
   resource_type: string;
   label_selector?: string;
   tenant?: string;
@@ -74,6 +74,7 @@ export interface TenantConfig {
   name: string;
   apiToken: string;
   tenantUrl: string;
+  defaultNamespace?: string;
 }
 
 export interface ServerConfig {

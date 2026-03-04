@@ -56,10 +56,12 @@ export function parseTenantEnvVars(): TenantConfig[] {
       process.exit(1);
     }
 
+    const defaultNamespace = process.env[`XC_TENANT_${name}_DEFAULT_NAMESPACE`];
     tenants.push({
       name: name.toLowerCase(),
       apiToken: token,
       tenantUrl: validateTenantUrl(url),
+      ...(defaultNamespace ? { defaultNamespace } : {}),
     });
   }
 
@@ -96,10 +98,12 @@ export function parseTenantEnvVars(): TenantConfig[] {
     process.exit(1);
   }
 
+  const defaultNamespace = process.env.XC_DEFAULT_NAMESPACE;
   tenants.push({
     name: "default",
     apiToken,
     tenantUrl: validateTenantUrl(tenantUrl),
+    ...(defaultNamespace ? { defaultNamespace } : {}),
   });
 
   return tenants;
@@ -133,4 +137,30 @@ export function resolveTenant(
 
   const available = tenants.map((t) => `${t.name} (${t.tenantUrl})`).join(", ");
   return `Multiple tenants configured. Specify the "tenant" parameter. Available: ${available}`;
+}
+
+/**
+ * Resolve namespace from explicit parameter, tenant default, or return guidance.
+ *
+ * Returns a string namespace on success, or a guidance object when no namespace
+ * could be determined. The guidance message is intended for the LLM to relay
+ * to the user rather than being treated as a hard error.
+ */
+export function resolveNamespace(
+  tenant: TenantConfig,
+  namespace?: string,
+): string | { guidance: string } {
+  if (namespace) {
+    return namespace;
+  }
+  if (tenant.defaultNamespace) {
+    return tenant.defaultNamespace;
+  }
+  return {
+    guidance:
+      "No namespace was specified and no default namespace is configured. " +
+      "Please ask the user which namespace to use. They can also set a default " +
+      "namespace via the XC_DEFAULT_NAMESPACE environment variable. " +
+      "Use xc_list_namespaces to see available namespaces.",
+  };
 }

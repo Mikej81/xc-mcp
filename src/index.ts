@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
 import { loadIndex } from "./lib/spec-index.js";
-import { parseTenantEnvVars, resolveTenant } from "./lib/tenant.js";
+import { parseTenantEnvVars, resolveTenant, resolveNamespace } from "./lib/tenant.js";
 import type { OperationsIndex } from "./types/index.js";
 import type { ServerConfig, TenantConfig } from "./types/index.js";
 import { handleDiscover } from "./tools/discover.js";
@@ -125,7 +125,8 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   server.tool(
     "xc_call_api",
     "Execute an F5 XC API call. Use xc_discover_apis and xc_get_operation_details first " +
-      "to understand the endpoint. Supports all HTTP methods with path params, query params, and body.",
+      "to understand the endpoint. Supports all HTTP methods with path params, query params, and body. " +
+      "When a default namespace is configured, it can be used for the {namespace} path parameter if not explicitly provided.",
     {
       method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).describe("HTTP method"),
       path: z.string().describe(
@@ -169,9 +170,12 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   server.tool(
     "xc_list_resources",
     "List resources of a specific type within a namespace. Common types: http_loadbalancers, " +
-      "tcp_loadbalancers, origin_pools, healthchecks, app_firewalls, service_policys, dns_zones, virtual_networks.",
+      "tcp_loadbalancers, origin_pools, healthchecks, app_firewalls, service_policys, dns_zones, virtual_networks. " +
+      "Namespace is optional if a default namespace is configured via XC_DEFAULT_NAMESPACE.",
     {
-      namespace: z.string().describe('Namespace to list resources in. Example: "default"'),
+      namespace: z.string().optional().describe(
+        'Namespace to list resources in. Optional if a default namespace is configured. Example: "default"',
+      ),
       resource_type: z.string().describe(
         'Resource type as it appears in the API path. Example: "http_loadbalancers"',
       ),
@@ -186,7 +190,11 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     async (params) => {
       const tenant = withTenant(config, params.tenant);
       if ("content" in tenant) return tenant;
-      return handleListResources(tenant, params);
+      const ns = resolveNamespace(tenant, params.namespace);
+      if (typeof ns !== "string") {
+        return { content: [{ type: "text", text: ns.guidance }] };
+      }
+      return handleListResources(tenant, { ...params, namespace: ns });
     },
   );
 

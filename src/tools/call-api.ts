@@ -1,5 +1,6 @@
 import type { CallApiParams, TenantConfig } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
+import { encodePemFields } from "../lib/pem-encoding.js";
 
 export async function handleCallApi(
   config: TenantConfig,
@@ -8,7 +9,7 @@ export async function handleCallApi(
   const response = await callApi(config, params.method, params.path, {
     pathParams: params.path_params,
     queryParams: params.query_params,
-    body: params.body,
+    body: await encodePemFields(config, params.path, params.body),
   });
 
   const output: any = {

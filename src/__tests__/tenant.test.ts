@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveTenant, validateTenantUrl, parseTenantEnvVars } from "../lib/tenant.js";
+import { resolveTenant, validateTenantUrl, parseTenantEnvVars, resolveNamespace } from "../lib/tenant.js";
 import type { TenantConfig } from "../types/index.js";
 
 describe("resolveTenant", () => {
@@ -151,5 +151,68 @@ describe("parseTenantEnvVars", () => {
     process.env.XC_TENANT_MYAPP_TOKEN = "tok";
     const result = parseTenantEnvVars();
     expect(result[0].name).toBe("myapp");
+  });
+
+  it("parses XC_TENANT_<NAME>_DEFAULT_NAMESPACE for named tenants", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_TOKEN = "abc123";
+    process.env.XC_TENANT_PROD_DEFAULT_NAMESPACE = "production";
+    const result = parseTenantEnvVars();
+    expect(result).toHaveLength(1);
+    expect(result[0].defaultNamespace).toBe("production");
+  });
+
+  it("omits defaultNamespace when env var not set for named tenant", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_TOKEN = "abc123";
+    const result = parseTenantEnvVars();
+    expect(result[0].defaultNamespace).toBeUndefined();
+  });
+
+  it("parses XC_DEFAULT_NAMESPACE for legacy single tenant", () => {
+    process.env.XC_API_TOKEN = "legacy-token";
+    process.env.XC_TENANT_URL = "https://legacy.console.ves.volterra.io";
+    process.env.XC_DEFAULT_NAMESPACE = "my-ns";
+    const result = parseTenantEnvVars();
+    expect(result).toHaveLength(1);
+    expect(result[0].defaultNamespace).toBe("my-ns");
+  });
+
+  it("omits defaultNamespace when XC_DEFAULT_NAMESPACE not set for legacy tenant", () => {
+    process.env.XC_API_TOKEN = "legacy-token";
+    process.env.XC_TENANT_URL = "https://legacy.console.ves.volterra.io";
+    const result = parseTenantEnvVars();
+    expect(result[0].defaultNamespace).toBeUndefined();
+  });
+});
+
+describe("resolveNamespace", () => {
+  const tenant: TenantConfig = {
+    name: "test",
+    apiToken: "tok",
+    tenantUrl: "https://test.ves.volterra.io",
+  };
+
+  const tenantWithDefault: TenantConfig = {
+    ...tenant,
+    defaultNamespace: "my-default",
+  };
+
+  it("returns explicit namespace when provided", () => {
+    expect(resolveNamespace(tenant, "explicit")).toBe("explicit");
+  });
+
+  it("returns explicit namespace even when default is configured", () => {
+    expect(resolveNamespace(tenantWithDefault, "explicit")).toBe("explicit");
+  });
+
+  it("returns default namespace when no explicit namespace provided", () => {
+    expect(resolveNamespace(tenantWithDefault)).toBe("my-default");
+  });
+
+  it("returns guidance when no namespace and no default", () => {
+    const result = resolveNamespace(tenant);
+    expect(typeof result).toBe("object");
+    expect((result as { guidance: string }).guidance).toContain("No namespace was specified");
   });
 });
