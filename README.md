@@ -17,6 +17,12 @@ Instead of registering thousands of individual tools, this server exposes **6 sm
 
 **Typical workflow:** The AI calls `xc_discover_apis` to find relevant endpoints > `xc_get_operation_details` to understand the schema > `xc_call_api` to make the actual request.
 
+### Handling large responses and complex schemas
+
+- **Response filtering:** Large API responses (like quota endpoints) can be truncated at 50KB. Use the `response_filter` parameter on `xc_call_api` to extract only the fields you need — e.g., `"items[].name,items[].labels"`.
+- **Schema depth control:** Complex resources like HTTP load balancers have deeply nested schemas that get truncated at the default depth of 4. Use `max_depth` on `xc_get_operation_details` (up to 10) to see deeper fields like origin_server types and advertise options.
+- **Oneof constraints:** The F5 XC API uses mutually exclusive field groups (e.g., pick one of `custom_hash_algorithms`, `disable_ocsp_stapling`, or `use_system_defaults`). These are now shown in the schema output as `x-ves-oneof-field-*` arrays.
+
 ## Prerequisites
 
 - An **F5 Distributed Cloud** account

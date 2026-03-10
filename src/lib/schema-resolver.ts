@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const MAX_DEPTH = 4;
+const DEFAULT_MAX_DEPTH = 4;
 
 // Cache loaded spec files in memory
 const specCache = new Map<string, any>();
@@ -36,9 +36,9 @@ function resolveRef(spec: any, ref: string): any {
  * Recursively resolve $ref pointers and inline schemas up to a max depth.
  * Returns a simplified schema object suitable for LLM consumption.
  */
-function resolveSchema(spec: any, schema: any, depth: number, visited: Set<string>): any {
+function resolveSchema(spec: any, schema: any, depth: number, visited: Set<string>, maxDepth: number = DEFAULT_MAX_DEPTH): any {
   if (!schema || typeof schema !== "object") return schema;
-  if (depth >= MAX_DEPTH) return { _note: "Schema truncated at max depth" };
+  if (depth >= maxDepth) return { _note: "Schema truncated at max depth" };
 
   // Handle $ref
   if (schema.$ref) {
@@ -49,12 +49,12 @@ function resolveSchema(spec: any, schema: any, depth: number, visited: Set<strin
     visited.add(ref);
     const resolved = resolveRef(spec, ref);
     if (!resolved) return { _note: `Unresolved ref: ${ref}` };
-    return resolveSchema(spec, resolved, depth, visited);
+    return resolveSchema(spec, resolved, depth, visited, maxDepth);
   }
 
   // Handle arrays
   if (Array.isArray(schema)) {
-    return schema.map((item) => resolveSchema(spec, item, depth, visited));
+    return schema.map((item) => resolveSchema(spec, item, depth, visited, maxDepth));
   }
 
   const result: any = {};
@@ -63,33 +63,40 @@ function resolveSchema(spec: any, schema: any, depth: number, visited: Set<strin
     if (key === "properties" && typeof value === "object" && value !== null) {
       result.properties = {};
       for (const [propName, propSchema] of Object.entries(value as Record<string, any>)) {
-        result.properties[propName] = resolveSchema(spec, propSchema, depth + 1, visited);
+        result.properties[propName] = resolveSchema(spec, propSchema, depth + 1, visited, maxDepth);
       }
     } else if (key === "items" && typeof value === "object") {
-      result.items = resolveSchema(spec, value, depth + 1, visited);
+      result.items = resolveSchema(spec, value, depth + 1, visited, maxDepth);
     } else if (key === "additionalProperties" && typeof value === "object") {
-      result.additionalProperties = resolveSchema(spec, value, depth + 1, visited);
+      result.additionalProperties = resolveSchema(spec, value, depth + 1, visited, maxDepth);
     } else if (key === "schema" && typeof value === "object") {
-      result.schema = resolveSchema(spec, value, depth + 1, visited);
+      result.schema = resolveSchema(spec, value, depth + 1, visited, maxDepth);
     } else if (key === "content" && typeof value === "object") {
       // Handle content (e.g., application/json in request bodies and responses)
       result.content = {};
       for (const [mediaType, mediaObj] of Object.entries(value as Record<string, any>)) {
         if (mediaObj && typeof mediaObj === "object" && mediaObj.schema) {
           result.content[mediaType] = {
-            schema: resolveSchema(spec, mediaObj.schema, depth + 1, visited),
+            schema: resolveSchema(spec, mediaObj.schema, depth + 1, visited, maxDepth),
           };
         }
       }
     } else if (key === "allOf" || key === "oneOf" || key === "anyOf") {
-      result[key] = (value as any[]).map((v) => resolveSchema(spec, v, depth + 1, visited));
+      result[key] = (value as any[]).map((v) => resolveSchema(spec, v, depth + 1, visited, maxDepth));
     } else if (
-      // Copy simple scalar properties
+      // Copy simple scalar properties and F5 oneof extensions
       ["type", "format", "description", "title", "enum", "default", "required",
        "minimum", "maximum", "minLength", "maxLength", "pattern",
        "name", "in", "x-displayname", "x-ves-example"].includes(key)
     ) {
       result[key] = value;
+    } else if (key.startsWith("x-ves-oneof-field-")) {
+      // Preserve F5 XC oneof constraint metadata so the LLM knows which fields are mutually exclusive
+      try {
+        result[key] = typeof value === "string" ? JSON.parse(value) : value;
+      } catch {
+        result[key] = value;
+      }
     }
   }
 
@@ -114,6 +121,7 @@ export function getOperationSchema(
   specFile: string,
   method: string,
   path: string,
+  maxDepth: number = DEFAULT_MAX_DEPTH,
 ): OperationSchema | null {
   const spec = loadSpec(specsDir, specFile);
   const pathItem = spec.paths?.[path];
@@ -128,7 +136,7 @@ export function getOperationSchema(
   // Path-level parameters
   if (Array.isArray(pathItem.parameters)) {
     for (const param of pathItem.parameters) {
-      const resolved = resolveSchema(spec, param, 0, new Set());
+      const resolved = resolveSchema(spec, param, 0, new Set(), maxDepth);
       parameters.push(resolved);
     }
   }
@@ -136,7 +144,7 @@ export function getOperationSchema(
   // Operation-level parameters
   if (Array.isArray(operation.parameters)) {
     for (const param of operation.parameters) {
-      const resolved = resolveSchema(spec, param, 0, new Set());
+      const resolved = resolveSchema(spec, param, 0, new Set(), maxDepth);
       parameters.push(resolved);
     }
   }
@@ -144,7 +152,7 @@ export function getOperationSchema(
   // Resolve request body
   let requestBody = null;
   if (operation.requestBody) {
-    requestBody = resolveSchema(spec, operation.requestBody, 0, new Set());
+    requestBody = resolveSchema(spec, operation.requestBody, 0, new Set(), maxDepth);
   }
 
   // Resolve responses (just 200/201 to keep it manageable)
@@ -152,7 +160,7 @@ export function getOperationSchema(
   if (operation.responses) {
     for (const [code, response] of Object.entries(operation.responses)) {
       if (code === "200" || code === "201" || code === "default") {
-        responses[code] = resolveSchema(spec, response, 0, new Set());
+        responses[code] = resolveSchema(spec, response, 0, new Set(), maxDepth);
       }
     }
   }

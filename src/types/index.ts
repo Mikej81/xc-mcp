@@ -40,6 +40,7 @@ export interface DiscoverParams {
 
 export interface OperationDetailsParams {
   operation_key: string;
+  max_depth?: number;
 }
 
 export interface CallApiParams {
@@ -49,6 +50,7 @@ export interface CallApiParams {
   query_params?: Record<string, string>;
   body?: unknown;
   tenant?: string;
+  response_filter?: string;
 }
 
 export interface ListNamespacesParams {

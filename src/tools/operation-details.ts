@@ -21,7 +21,8 @@ export function handleOperationDetails(
     };
   }
 
-  const schema = getOperationSchema(specsDir, entry.specFile, entry.method, entry.path);
+  const maxDepth = params.max_depth != null ? Math.min(Math.max(params.max_depth, 1), 10) : undefined;
+  const schema = getOperationSchema(specsDir, entry.specFile, entry.method, entry.path, maxDepth);
 
   if (!schema) {
     return {
@@ -52,6 +53,16 @@ export function handleOperationDetails(
       hasRequestBody: entry.hasRequestBody,
     },
   };
+
+  // Add notes for certificate operations
+  if (entry.path.includes("/certificates") && entry.hasRequestBody) {
+    output.notes = output.notes || [];
+    output.notes.push(
+      "Private keys MUST be in PKCS1 format (BEGIN RSA PRIVATE KEY). " +
+        "PKCS8 format (BEGIN PRIVATE KEY) will fail with 'failed to parse private key'. " +
+        "Convert with: openssl rsa -in key.pem -out key-pkcs1.pem -traditional",
+    );
+  }
 
   let text = JSON.stringify(output, null, 2);
 

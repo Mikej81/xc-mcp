@@ -41,7 +41,7 @@ function makeIndex(ops: OperationIndexEntry[]): OperationsIndex {
 }
 
 describe("handleOperationDetails", () => {
-  const op = makeOp({ key: "GET:/api/lb", pathParams: ["namespace"], queryParams: ["limit"] });
+  const op = makeOp({ key: "GET:/api/lb", path: "/api/lb", pathParams: ["namespace"], queryParams: ["limit"] });
   const index = makeIndex([op]);
 
   it("returns JSON output for valid key", () => {
@@ -95,5 +95,85 @@ describe("handleOperationDetails", () => {
     const text = result.content[0].text;
     expect(text.length).toBeLessThanOrEqual(50_000 + 50); // 50KB + truncation message
     expect(text).toContain("[Schema truncated at 50KB]");
+  });
+
+  it("passes max_depth to getOperationSchema", () => {
+    mockGetSchema.mockReturnValue({
+      method: "GET",
+      path: "/api/lb",
+      summary: "Deep",
+      description: "test",
+      parameters: [],
+      requestBody: null,
+      responses: {},
+    });
+
+    mockGetSchema.mockClear();
+    handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 8 });
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 8);
+  });
+
+  it("clamps max_depth between 1 and 10", () => {
+    mockGetSchema.mockReturnValue({
+      method: "GET",
+      path: "/api/lb",
+      summary: "Clamped",
+      description: "test",
+      parameters: [],
+      requestBody: null,
+      responses: {},
+    });
+
+    mockGetSchema.mockClear();
+    handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 99 });
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 10);
+
+    mockGetSchema.mockClear();
+    handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 0 });
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 1);
+  });
+
+  it("adds PKCS1 note for certificate operations with request body", () => {
+    const certOp = makeOp({
+      key: "POST:/api/config/namespaces/{namespace}/certificates",
+      method: "POST",
+      path: "/api/config/namespaces/{namespace}/certificates",
+      hasRequestBody: true,
+    });
+    const certIndex = makeIndex([certOp]);
+
+    mockGetSchema.mockReturnValue({
+      method: "POST",
+      path: "/api/config/namespaces/{namespace}/certificates",
+      summary: "Create certificate",
+      description: "Create cert",
+      parameters: [],
+      requestBody: { content: {} },
+      responses: { "200": { description: "OK" } },
+    });
+
+    const result = handleOperationDetails(certIndex, "/specs", {
+      operation_key: "POST:/api/config/namespaces/{namespace}/certificates",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.notes).toBeDefined();
+    expect(parsed.notes[0]).toContain("PKCS1");
+    expect(parsed.notes[0]).toContain("BEGIN RSA PRIVATE KEY");
+  });
+
+  it("does not add PKCS1 note for non-certificate operations", () => {
+    mockGetSchema.mockReturnValue({
+      method: "GET",
+      path: "/api/lb",
+      summary: "List LBs",
+      description: "test",
+      parameters: [],
+      requestBody: null,
+      responses: {},
+    });
+
+    const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.notes).toBeUndefined();
   });
 });

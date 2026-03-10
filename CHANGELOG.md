@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.5 -- 2026-03-10
+
+### Response filtering, schema depth control, and oneof documentation
+
+- **Response filtering** -- new `response_filter` parameter on `xc_call_api` extracts specific fields from large API responses before truncation. Supports dot notation and `[]` for arrays (e.g., `"items[].name,items[].labels"`)
+- **Configurable schema depth** -- new `max_depth` parameter on `xc_get_operation_details` (default 4, max 10) lets you see deeper nested fields like origin_server types and advertise options
+- **Oneof constraint visibility** -- F5 XC `x-ves-oneof-field-*` extensions are now preserved in schema output and parsed from JSON strings to arrays, so the LLM knows which fields are mutually exclusive
+- **PKCS1 key format note** -- certificate operations now include a note that private keys must be in PKCS1 format (`BEGIN RSA PRIVATE KEY`), not PKCS8
+- Truncation warning on `xc_call_api` now suggests using `response_filter`
+- **Unit tests** -- 134 tests across 13 test files (up from 119/13)
+
 ## 0.0.4 -- 2026-03-04
 
 ### Default namespace configuration

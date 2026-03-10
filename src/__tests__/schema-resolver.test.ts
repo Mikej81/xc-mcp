@@ -145,7 +145,7 @@ describe("getOperationSchema", () => {
     expect(responseSchema?.properties?.child?._note).toContain("Circular reference");
   });
 
-  it("truncates at max depth", () => {
+  it("truncates at default max depth (4)", () => {
     // Build deeply nested schema
     const spec = makeSpec(
       {
@@ -198,6 +198,65 @@ describe("getOperationSchema", () => {
     expect(text).toContain("Schema truncated at max depth");
   });
 
+  it("resolves deeper when maxDepth is increased", () => {
+    const spec = makeSpec(
+      {
+        "/api/test": {
+          get: {
+            summary: "Deep",
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        l1: {
+                          type: "object",
+                          properties: {
+                            l2: {
+                              type: "object",
+                              properties: {
+                                l3: {
+                                  type: "object",
+                                  properties: {
+                                    l4: {
+                                      type: "object",
+                                      properties: {
+                                        l5: { type: "string" },
+                                      },
+                                    },
+                                  },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    mockReadFileSync.mockReturnValue(spec);
+
+    // Default depth 4 truncates
+    const resultDefault = getOperationSchema("/specs", "deep-default.json", "GET", "/api/test");
+    expect(JSON.stringify(resultDefault)).toContain("Schema truncated at max depth");
+
+    // Depth 8 resolves fully
+    const resultDeep = getOperationSchema("/specs", "deep-8.json", "GET", "/api/test", 8);
+    const text = JSON.stringify(resultDeep);
+    expect(text).not.toContain("Schema truncated at max depth");
+    // Should reach l5
+    const schema = resultDeep!.responses["200"]?.content?.["application/json"]?.schema;
+    expect(schema?.properties?.l1?.properties?.l2?.properties?.l3?.properties?.l4?.properties?.l5?.type).toBe("string");
+  });
+
   it("merges path-level and operation-level parameters", () => {
     const spec = makeSpec({
       "/api/{ns}/items": {
@@ -234,5 +293,45 @@ describe("getOperationSchema", () => {
 
     const result = getOperationSchema("/specs", "responses.json", "POST", "/api/test");
     expect(Object.keys(result!.responses).sort()).toEqual(["200", "201", "default"]);
+  });
+
+  it("preserves x-ves-oneof-field extensions", () => {
+    const spec = makeSpec({
+      "/api/test": {
+        post: {
+          summary: "Create cert",
+          responses: { "200": { description: "OK" } },
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  "x-ves-oneof-field-ocsp_stapling_choice": '["custom_hash_algorithms","disable_ocsp_stapling","use_system_defaults"]',
+                  properties: {
+                    custom_hash_algorithms: { type: "object" },
+                    disable_ocsp_stapling: { type: "object" },
+                    use_system_defaults: { type: "object" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    mockReadFileSync.mockReturnValue(spec);
+
+    const result = getOperationSchema("/specs", "oneof.json", "POST", "/api/test");
+    const bodySchema = result!.requestBody?.content?.["application/json"]?.schema;
+    // Should be parsed from JSON string to array
+    expect(bodySchema["x-ves-oneof-field-ocsp_stapling_choice"]).toEqual([
+      "custom_hash_algorithms",
+      "disable_ocsp_stapling",
+      "use_system_defaults",
+    ]);
+    // All three properties should exist
+    expect(bodySchema.properties.custom_hash_algorithms).toBeDefined();
+    expect(bodySchema.properties.disable_ocsp_stapling).toBeDefined();
+    expect(bodySchema.properties.use_system_defaults).toBeDefined();
   });
 });

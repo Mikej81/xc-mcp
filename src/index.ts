@@ -112,11 +112,17 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   server.tool(
     "xc_get_operation_details",
     "Get full schema details for a specific F5 XC API operation including parameters, " +
-      "request body schema, and response schema. Use xc_discover_apis first to find the operation_key.",
+      "request body schema, and response schema. Use xc_discover_apis first to find the operation_key. " +
+      "Increase max_depth (default 4) if the schema is truncated and you need to see deeper nested fields. " +
+      "Note: F5 XC uses x-ves-oneof-field-* to mark mutually exclusive fields -- only set ONE field from each group.",
     {
       operation_key: z.string().describe(
         'The operation key in "METHOD:path" format from xc_discover_apis. ' +
           'Example: "GET:/api/config/namespaces/{namespace}/http_loadbalancers"',
+      ),
+      max_depth: z.number().optional().describe(
+        "Maximum schema resolution depth (default 4, max 10). Increase to see deeper nested fields " +
+          "like origin_server types or advertise options in complex resources.",
       ),
     },
     async (params) => handleOperationDetails(index, config.specsDir, params),
@@ -142,6 +148,11 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       tenant: z.string().optional().describe(
         "Tenant name to use. Required when multiple tenants are configured. " +
           "Use xc_list_tenants to see available tenants.",
+      ),
+      response_filter: z.string().optional().describe(
+        "Comma-separated field paths to extract from the response body. Useful for large responses " +
+          "that would be truncated. Supports dot notation and [] for arrays. " +
+          'Examples: "items", "items[].name,items[].labels", "spec.origin_servers"',
       ),
     },
     async (params) => {

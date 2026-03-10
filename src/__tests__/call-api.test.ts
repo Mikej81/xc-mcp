@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { handleCallApi } from "../tools/call-api.js";
+import { handleCallApi, filterResponse } from "../tools/call-api.js";
 import type { TenantConfig } from "../types/index.js";
 
 // Mock the api-client module
@@ -57,6 +57,7 @@ describe("handleCallApi", () => {
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.warning).toContain("truncated");
+    expect(parsed.warning).toContain("response_filter");
   });
 
   it("forwards params to callApi correctly", async () => {
@@ -118,5 +119,95 @@ describe("handleCallApi", () => {
     const text = result.content[0].text;
     expect(text.length).toBeLessThanOrEqual(60_000 + 50);
     expect(text).toContain("[Output truncated]");
+  });
+
+  it("applies response_filter and sets filtered flag", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [{ name: "lb1", spec: { big: "data" } }, { name: "lb2", spec: { big: "data2" } }],
+        metadata: { total: 2 },
+      },
+    });
+
+    const result = await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+      response_filter: "items,metadata",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.filtered).toBe(true);
+    expect(parsed.body.items).toHaveLength(2);
+    expect(parsed.body.metadata).toEqual({ total: 2 });
+  });
+
+  it("suppresses truncation warning when response_filter is set", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }] },
+      truncated: true,
+    });
+
+    const result = await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+      response_filter: "items",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.warning).toBeUndefined();
+    expect(parsed.filtered).toBe(true);
+  });
+});
+
+describe("filterResponse", () => {
+  const data = {
+    items: [
+      { name: "a", labels: { env: "prod" }, spec: { nested: true } },
+      { name: "b", labels: { env: "dev" }, spec: { nested: false } },
+    ],
+    metadata: { total: 2, page: 1 },
+    extra: "large-data",
+  };
+
+  it("extracts top-level fields", () => {
+    const result = filterResponse(data, "metadata") as any;
+    expect(result.metadata).toEqual({ total: 2, page: 1 });
+    expect(result.items).toBeUndefined();
+    expect(result.extra).toBeUndefined();
+  });
+
+  it("extracts multiple top-level fields", () => {
+    const result = filterResponse(data, "items,metadata") as any;
+    expect(result.items).toHaveLength(2);
+    expect(result.metadata).toEqual({ total: 2, page: 1 });
+    expect(result.extra).toBeUndefined();
+  });
+
+  it("extracts nested fields via dot notation", () => {
+    const result = filterResponse(data, "metadata.total") as any;
+    expect(result.metadata.total).toBe(2);
+    expect(result.metadata.page).toBeUndefined();
+  });
+
+  it("extracts array fields with [] notation", () => {
+    const result = filterResponse(data, "items[].name") as any;
+    expect(result.items).toEqual([{ name: "a" }, { name: "b" }]);
+  });
+
+  it("returns body unchanged when filter is empty", () => {
+    expect(filterResponse(data, "")).toEqual(data);
+  });
+
+  it("returns body unchanged for non-object body", () => {
+    expect(filterResponse("string-body", "items")).toBe("string-body");
+  });
+
+  it("handles missing fields gracefully", () => {
+    const result = filterResponse(data, "nonexistent") as any;
+    expect(result.nonexistent).toBeUndefined();
   });
 });
