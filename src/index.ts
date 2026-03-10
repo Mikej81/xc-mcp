@@ -18,6 +18,7 @@ import { handleOperationDetails } from "./tools/operation-details.js";
 import { handleCallApi } from "./tools/call-api.js";
 import { handleListNamespaces } from "./tools/list-namespaces.js";
 import { handleListResources } from "./tools/list-resources.js";
+import { VERSION, checkForUpdate } from "./lib/version.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -211,18 +212,30 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_list_tenants",
-    "List all configured F5 XC tenants. Shows tenant names and URLs.",
+    "List all configured F5 XC tenants. Shows tenant names, URLs, and server version.",
     {},
     async () => {
-      const lines = [`${config.tenants.length} tenant(s) configured:\n`];
+      const lines = [`F5 XC MCP Server v${VERSION}\n`];
+      lines.push(`${config.tenants.length} tenant(s) configured:\n`);
       for (const t of config.tenants) {
-        lines.push(`- ${t.name} -- ${t.tenantUrl}`);
+        const ns = t.defaultNamespace ? ` (default namespace: ${t.defaultNamespace})` : "";
+        lines.push(`- ${t.name} -- ${t.tenantUrl}${ns}`);
       }
       if (config.tenants.length > 1) {
         lines.push(
           `\nPass the tenant name to xc_call_api, xc_list_namespaces, or xc_list_resources.`,
         );
       }
+
+      const update = await checkForUpdate();
+      if (update.updateAvailable && update.latest) {
+        lines.push(
+          `\n⚠ Update available: v${update.latest} (current: v${update.current})`,
+          `  Docker: docker pull ghcr.io/mikej81/xc-mcp:latest`,
+          `  Git: git pull && npm run build`,
+        );
+      }
+
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
@@ -231,7 +244,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 function createMcpServer(config: ServerConfig, index: OperationsIndex): McpServer {
   const server = new McpServer({
     name: "f5-xc-mcp",
-    version: "1.0.0",
+    version: VERSION,
   });
   registerTools(server, config, index);
   return server;
@@ -366,11 +379,19 @@ async function main() {
 
   const transport = process.env.MCP_TRANSPORT?.toLowerCase();
 
-  console.error(`F5 XC MCP Server starting...`);
+  console.error(`F5 XC MCP Server v${VERSION} starting...`);
   console.error(`  Tenants: ${config.tenants.map((t) => `${t.name} (${t.tenantUrl})`).join(", ")}`);
   console.error(`  Operations indexed: ${index.totalOperations}`);
   console.error(`  Categories: ${index.categories.length}`);
   console.error(`  Transport: ${transport === "http" ? "HTTP" : "stdio"}`);
+
+  // Non-blocking update check — log to stderr, never delay startup
+  checkForUpdate().then((update) => {
+    if (update.updateAvailable && update.latest) {
+      console.error(`\n  Update available: v${update.latest} (current: v${update.current})`);
+      console.error(`  Run: docker pull ghcr.io/mikej81/xc-mcp:latest`);
+    }
+  }).catch(() => { /* ignore */ });
 
   if (transport === "http") {
     await startHttp(config, index);
