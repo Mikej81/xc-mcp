@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.0.7 -- 2026-03-12
+
+### QA remediation
+
+- **response_filter skips error responses** -- 4xx/5xx responses always return the full error body, never filtered
+- **response_filter empty match warning** -- returns `filter_warning` with available top-level keys when filter matches nothing
+- **include_response_schema option** -- `xc_get_operation_details` now omits response schemas by default (they duplicate request schemas). Set `include_response_schema: true` to include them
+- **summary_mode** -- new option on `xc_get_operation_details` strips descriptions, examples, and validation rules, keeping only types, required fields, enums, and oneof groups
+- **Namespace prefix filter** -- `xc_list_namespaces` now supports `prefix` and `label_selector` params to reduce token usage on large tenants
+- **Field projection** -- `xc_list_resources` now supports a `fields` param with dot-notation (e.g., `["spec.origin_servers", "system_metadata.creation_timestamp"]`)
+- **max_items** -- `xc_list_resources` now supports `max_items` to limit returned items
+- **PKCS1/PKCS8 docs corrected** -- both PEM key formats are accepted by the XC API; documentation updated
+- **Unit tests** -- 153 tests across 14 test files (up from 140/14)
+
 ## 0.0.6 -- 2026-03-10
 
 ### Response filtering, schema depth control, oneof docs, and version check
