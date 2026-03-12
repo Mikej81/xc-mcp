@@ -40,20 +40,22 @@ function makeIndex(ops: OperationIndexEntry[]): OperationsIndex {
   };
 }
 
+const fullSchema = {
+  method: "GET",
+  path: "/api/lb",
+  summary: "List load balancers",
+  description: "Lists all LBs",
+  parameters: [{ name: "namespace", in: "path", description: "The namespace" }],
+  requestBody: null,
+  responses: { "200": { description: "OK" } },
+};
+
 describe("handleOperationDetails", () => {
   const op = makeOp({ key: "GET:/api/lb", path: "/api/lb", pathParams: ["namespace"], queryParams: ["limit"] });
   const index = makeIndex([op]);
 
   it("returns JSON output for valid key", () => {
-    mockGetSchema.mockReturnValue({
-      method: "GET",
-      path: "/api/lb",
-      summary: "List load balancers",
-      description: "Lists all LBs",
-      parameters: [{ name: "namespace", in: "path" }],
-      requestBody: null,
-      responses: { "200": { description: "OK" } },
-    });
+    mockGetSchema.mockReturnValue(fullSchema);
 
     const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
     const text = result.content[0].text;
@@ -82,47 +84,26 @@ describe("handleOperationDetails", () => {
 
   it("truncates output > 50KB", () => {
     mockGetSchema.mockReturnValue({
-      method: "GET",
-      path: "/api/lb",
+      ...fullSchema,
       summary: "Big",
       description: "x".repeat(60_000),
-      parameters: [],
-      requestBody: null,
-      responses: {},
     });
 
     const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
     const text = result.content[0].text;
-    expect(text.length).toBeLessThanOrEqual(50_000 + 50); // 50KB + truncation message
+    expect(text.length).toBeLessThanOrEqual(50_000 + 50);
     expect(text).toContain("[Schema truncated at 50KB]");
   });
 
   it("passes max_depth to getOperationSchema", () => {
-    mockGetSchema.mockReturnValue({
-      method: "GET",
-      path: "/api/lb",
-      summary: "Deep",
-      description: "test",
-      parameters: [],
-      requestBody: null,
-      responses: {},
-    });
-
+    mockGetSchema.mockReturnValue(fullSchema);
     mockGetSchema.mockClear();
     handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 8 });
     expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 8);
   });
 
   it("clamps max_depth between 1 and 10", () => {
-    mockGetSchema.mockReturnValue({
-      method: "GET",
-      path: "/api/lb",
-      summary: "Clamped",
-      description: "test",
-      parameters: [],
-      requestBody: null,
-      responses: {},
-    });
+    mockGetSchema.mockReturnValue(fullSchema);
 
     mockGetSchema.mockClear();
     handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 99 });
@@ -133,7 +114,7 @@ describe("handleOperationDetails", () => {
     expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 1);
   });
 
-  it("adds PKCS1 note for certificate operations with request body", () => {
+  it("adds PEM note for certificate operations with request body", () => {
     const certOp = makeOp({
       key: "POST:/api/config/namespaces/{namespace}/certificates",
       method: "POST",
@@ -143,13 +124,11 @@ describe("handleOperationDetails", () => {
     const certIndex = makeIndex([certOp]);
 
     mockGetSchema.mockReturnValue({
+      ...fullSchema,
       method: "POST",
       path: "/api/config/namespaces/{namespace}/certificates",
       summary: "Create certificate",
-      description: "Create cert",
-      parameters: [],
       requestBody: { content: {} },
-      responses: { "200": { description: "OK" } },
     });
 
     const result = handleOperationDetails(certIndex, "/specs", {
@@ -157,23 +136,102 @@ describe("handleOperationDetails", () => {
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.notes).toBeDefined();
+    expect(parsed.notes[0]).toContain("PEM-encoded");
     expect(parsed.notes[0]).toContain("PKCS1");
-    expect(parsed.notes[0]).toContain("BEGIN RSA PRIVATE KEY");
+    expect(parsed.notes[0]).toContain("PKCS8");
   });
 
-  it("does not add PKCS1 note for non-certificate operations", () => {
-    mockGetSchema.mockReturnValue({
-      method: "GET",
-      path: "/api/lb",
-      summary: "List LBs",
-      description: "test",
-      parameters: [],
-      requestBody: null,
-      responses: {},
-    });
+  it("does not add PEM note for non-certificate operations", () => {
+    mockGetSchema.mockReturnValue(fullSchema);
 
     const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.notes).toBeUndefined();
+  });
+
+  it("omits response schema by default", () => {
+    mockGetSchema.mockReturnValue(fullSchema);
+
+    const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.responses).toBeUndefined();
+  });
+
+  it("includes response schema when include_response_schema is true", () => {
+    mockGetSchema.mockReturnValue(fullSchema);
+
+    const result = handleOperationDetails(index, "/specs", {
+      operation_key: "GET:/api/lb",
+      include_response_schema: true,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.responses).toBeDefined();
+    expect(parsed.responses["200"]).toBeDefined();
+  });
+
+  it("strips descriptions in summary_mode", () => {
+    mockGetSchema.mockReturnValue({
+      ...fullSchema,
+      parameters: [{ name: "namespace", in: "path", description: "The namespace to use", type: "string" }],
+      requestBody: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              description: "Request body for LBs",
+              properties: {
+                name: { type: "string", description: "Name of the LB", "x-ves-example": "my-lb" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = handleOperationDetails(index, "/specs", {
+      operation_key: "GET:/api/lb",
+      summary_mode: true,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    // description should be omitted from top-level output
+    expect(parsed.description).toBeUndefined();
+    // parameter descriptions should be stripped
+    expect(parsed.parameters[0].description).toBeUndefined();
+    expect(parsed.parameters[0].name).toBe("namespace");
+    expect(parsed.parameters[0].type).toBe("string");
+    // Nested descriptions and examples should be stripped
+    const bodySchema = parsed.requestBody?.content?.["application/json"]?.schema;
+    expect(bodySchema.description).toBeUndefined();
+    expect(bodySchema.properties.name.description).toBeUndefined();
+    expect(bodySchema.properties.name["x-ves-example"]).toBeUndefined();
+    expect(bodySchema.properties.name.type).toBe("string");
+  });
+
+  it("preserves oneof fields in summary_mode", () => {
+    mockGetSchema.mockReturnValue({
+      ...fullSchema,
+      requestBody: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              "x-ves-oneof-field-choice": ["opt_a", "opt_b"],
+              properties: {
+                opt_a: { type: "object" },
+                opt_b: { type: "object" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = handleOperationDetails(index, "/specs", {
+      operation_key: "GET:/api/lb",
+      summary_mode: true,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    const bodySchema = parsed.requestBody?.content?.["application/json"]?.schema;
+    expect(bodySchema["x-ves-oneof-field-choice"]).toEqual(["opt_a", "opt_b"]);
   });
 });

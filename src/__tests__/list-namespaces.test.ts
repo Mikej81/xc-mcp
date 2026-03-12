@@ -92,4 +92,79 @@ describe("handleListNamespaces", () => {
     expect(text).toContain("403");
     expect(result.isError).toBe(true);
   });
+
+  it("filters namespaces by prefix", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [
+          { name: "prod-web" },
+          { name: "prod-api" },
+          { name: "staging-web" },
+          { name: "py-testns-0" },
+          { name: "py-testns-1" },
+        ],
+      },
+    });
+
+    const result = await handleListNamespaces(config, { prefix: "prod" });
+    const text = result.content[0].text;
+    expect(text).toContain("Found 2 namespaces");
+    expect(text).toContain("filtered from 5 total");
+    expect(text).toContain("prod-web");
+    expect(text).toContain("prod-api");
+    expect(text).not.toContain("staging");
+    expect(text).not.toContain("py-testns");
+  });
+
+  it("prefix filter is case-insensitive", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [{ name: "Prod-web" }, { name: "staging" }],
+      },
+    });
+
+    const result = await handleListNamespaces(config, { prefix: "PROD" });
+    const text = result.content[0].text;
+    expect(text).toContain("Found 1 namespaces");
+    expect(text).toContain("Prod-web");
+  });
+
+  it("returns empty message when prefix matches nothing", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [{ name: "staging" }, { name: "default" }],
+      },
+    });
+
+    const result = await handleListNamespaces(config, { prefix: "prod" });
+    const text = result.content[0].text;
+    expect(text).toContain("No namespaces found");
+    expect(text).toContain('matching prefix "prod"');
+  });
+
+  it("forwards label_selector as query param", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "ns1" }] },
+    });
+
+    await handleListNamespaces(config, { label_selector: "env=prod" });
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/web/namespaces",
+      { queryParams: { label_selector: "env=prod" } },
+    );
+  });
 });

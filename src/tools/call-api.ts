@@ -6,12 +6,15 @@ import { encodePemFields } from "../lib/pem-encoding.js";
  * Extract fields from a response body using dot-separated paths.
  * Supports comma-separated field list, e.g. "items[].name,items[].labels"
  * or simple top-level field names like "items,metadata".
+ *
+ * Returns { filtered, matchedAny } so callers can detect empty matches.
  */
-export function filterResponse(body: unknown, filter: string): unknown {
-  if (!body || typeof body !== "object" || !filter) return body;
+export function filterResponse(body: unknown, filter: string): { filtered: unknown; matchedAny: boolean } {
+  if (!body || typeof body !== "object" || !filter) return { filtered: body, matchedAny: true };
 
   const paths = filter.split(",").map((p) => p.trim()).filter(Boolean);
   const result: Record<string, unknown> = {};
+  let matchedAny = false;
 
   for (const path of paths) {
     const parts = path.split(".");
@@ -28,20 +31,18 @@ export function filterResponse(body: unknown, filter: string): unknown {
 
       if (isLast) {
         if (isArrayAccess && Array.isArray(source[key])) {
-          // Last part with [] — include the full array
           target[key] = source[key];
+          matchedAny = true;
         } else if (source[key] !== undefined) {
           target[key] = source[key];
+          matchedAny = true;
         }
       } else {
-        // Navigate deeper
         if (isArrayAccess && Array.isArray(source[key])) {
-          // For array traversal mid-path, extract the nested field from each element
           const remaining = parts.slice(i + 1).join(".");
-          target[key] = source[key].map((item: any) => {
-            const extracted = filterResponse(item, remaining);
-            return extracted;
-          });
+          const inner = source[key].map((item: any) => filterResponse(item, remaining));
+          target[key] = inner.map((r: { filtered: unknown }) => r.filtered);
+          if (inner.some((r: { matchedAny: boolean }) => r.matchedAny)) matchedAny = true;
           break;
         } else {
           if (target[key] === undefined) {
@@ -54,7 +55,15 @@ export function filterResponse(body: unknown, filter: string): unknown {
     }
   }
 
-  return result;
+  return { filtered: result, matchedAny };
+}
+
+/**
+ * Get sample top-level keys from a response body for diagnostic hints.
+ */
+function sampleKeys(body: unknown, max = 10): string[] {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+  return Object.keys(body).slice(0, max);
 }
 
 export async function handleCallApi(
@@ -72,13 +81,23 @@ export async function handleCallApi(
     statusText: response.statusText,
   };
 
+  const isError = response.status >= 400;
+
   if (response.truncated && !params.response_filter) {
     output.warning = "Response was truncated at 50KB. Use response_filter to extract specific fields.";
   }
 
-  if (params.response_filter && response.body && typeof response.body === "object") {
-    output.body = filterResponse(response.body, params.response_filter);
+  // Never apply response_filter to error responses — always return the full error body
+  if (params.response_filter && !isError && response.body && typeof response.body === "object") {
+    const { filtered, matchedAny } = filterResponse(response.body, params.response_filter);
+    output.body = filtered;
     output.filtered = true;
+    if (!matchedAny) {
+      const available = sampleKeys(response.body);
+      output.filter_warning =
+        `response_filter "${params.response_filter}" matched no fields. ` +
+        `Available top-level keys: [${available.join(", ")}]`;
+    }
   } else {
     output.body = response.body;
   }

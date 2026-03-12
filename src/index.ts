@@ -112,9 +112,10 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_get_operation_details",
-    "Get full schema details for a specific F5 XC API operation including parameters, " +
-      "request body schema, and response schema. Use xc_discover_apis first to find the operation_key. " +
+    "Get full schema details for a specific F5 XC API operation including parameters and " +
+      "request body schema. Use xc_discover_apis first to find the operation_key. " +
       "Increase max_depth (default 4) if the schema is truncated and you need to see deeper nested fields. " +
+      "Use summary_mode to reduce token usage by stripping descriptions and validation rules. " +
       "Note: F5 XC uses x-ves-oneof-field-* to mark mutually exclusive fields -- only set ONE field from each group.",
     {
       operation_key: z.string().describe(
@@ -124,6 +125,14 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       max_depth: z.number().optional().describe(
         "Maximum schema resolution depth (default 4, max 10). Increase to see deeper nested fields " +
           "like origin_server types or advertise options in complex resources.",
+      ),
+      include_response_schema: z.boolean().optional().describe(
+        "Include response schema in output (default false). Response schemas are usually similar " +
+          "to request schemas and double the output size. Only enable when you need to inspect response format.",
+      ),
+      summary_mode: z.boolean().optional().describe(
+        "Strip descriptions, examples, and validation rules from the schema (default false). " +
+          "Returns only types, required fields, enums, and oneof groups. Significantly reduces output size.",
       ),
     },
     async (params) => handleOperationDetails(index, config.specsDir, params),
@@ -165,17 +174,24 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_list_namespaces",
-    "List all namespaces in the F5 XC tenant. Typically the first step -- most resources are scoped to a namespace.",
+    "List all namespaces in the F5 XC tenant. Typically the first step -- most resources are scoped to a namespace. " +
+      "Use prefix to filter by name prefix (e.g., exclude test namespaces).",
     {
       tenant: z.string().optional().describe(
         "Tenant name to use. Required when multiple tenants are configured. " +
           "Use xc_list_tenants to see available tenants.",
       ),
+      prefix: z.string().optional().describe(
+        'Filter namespaces by name prefix. Example: "prod" returns only namespaces starting with "prod".',
+      ),
+      label_selector: z.string().optional().describe(
+        'Filter namespaces by label selector. Example: "environment=production".',
+      ),
     },
     async (params) => {
       const tenant = withTenant(config, params.tenant);
       if ("content" in tenant) return tenant;
-      return handleListNamespaces(tenant);
+      return handleListNamespaces(tenant, params);
     },
   );
 
@@ -183,7 +199,8 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     "xc_list_resources",
     "List resources of a specific type within a namespace. Common types: http_loadbalancers, " +
       "tcp_loadbalancers, origin_pools, healthchecks, app_firewalls, service_policys, dns_zones, virtual_networks. " +
-      "Namespace is optional if a default namespace is configured via XC_DEFAULT_NAMESPACE.",
+      "Namespace is optional if a default namespace is configured via XC_DEFAULT_NAMESPACE. " +
+      "Use fields to extract specific per-item data, and max_items to limit results.",
     {
       namespace: z.string().optional().describe(
         'Namespace to list resources in. Optional if a default namespace is configured. Example: "default"',
@@ -197,6 +214,13 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       tenant: z.string().optional().describe(
         "Tenant name to use. Required when multiple tenants are configured. " +
           "Use xc_list_tenants to see available tenants.",
+      ),
+      fields: z.array(z.string()).optional().describe(
+        "Fields to extract per item. Supports dot notation for nested fields. " +
+          'Examples: ["name", "labels", "spec.origin_servers", "system_metadata.creation_timestamp"]',
+      ),
+      max_items: z.number().optional().describe(
+        "Maximum number of items to return. Useful for large namespaces. Returns all items if omitted.",
       ),
     },
     async (params) => {

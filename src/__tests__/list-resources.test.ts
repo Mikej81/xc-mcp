@@ -123,6 +123,65 @@ describe("handleListResources", () => {
     expect(text).toContain("404");
     expect(result.isError).toBe(true);
   });
+
+  it("limits items with max_items", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [
+          { name: "lb1" },
+          { name: "lb2" },
+          { name: "lb3" },
+          { name: "lb4" },
+          { name: "lb5" },
+        ],
+      },
+    });
+
+    const result = await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+      max_items: 2,
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("Found 5 http_loadbalancers");
+    expect(text).toContain("showing 2 of 5");
+    expect(text).toContain("lb1");
+    expect(text).toContain("lb2");
+    expect(text).not.toContain("lb3");
+  });
+
+  it("extracts specific fields with fields param", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [
+          {
+            name: "lb1",
+            labels: { env: "prod" },
+            spec: { origin_servers: [{ addr: "10.0.0.1" }] },
+            system_metadata: { creation_timestamp: "2026-01-01" },
+          },
+        ],
+      },
+    });
+
+    const result = await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+      fields: ["spec.origin_servers", "system_metadata.creation_timestamp"],
+    });
+    const text = result.content[0].text;
+    expect(text).toContain("lb1");
+    expect(text).toContain("spec.origin_servers");
+    expect(text).toContain("10.0.0.1");
+    expect(text).toContain("system_metadata.creation_timestamp");
+    expect(text).toContain("2026-01-01");
+  });
 });
 
 describe("namespace resolution with handleListResources", () => {

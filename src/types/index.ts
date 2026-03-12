@@ -41,6 +41,8 @@ export interface DiscoverParams {
 export interface OperationDetailsParams {
   operation_key: string;
   max_depth?: number;
+  include_response_schema?: boolean;
+  summary_mode?: boolean;
 }
 
 export interface CallApiParams {
@@ -55,6 +57,8 @@ export interface CallApiParams {
 
 export interface ListNamespacesParams {
   tenant?: string;
+  prefix?: string;
+  label_selector?: string;
 }
 
 export interface ListResourcesParams {
@@ -62,6 +66,8 @@ export interface ListResourcesParams {
   resource_type: string;
   label_selector?: string;
   tenant?: string;
+  fields?: string[];
+  max_items?: number;
 }
 
 export interface ApiResponse {

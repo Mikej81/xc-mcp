@@ -161,6 +161,46 @@ describe("handleCallApi", () => {
     expect(parsed.warning).toBeUndefined();
     expect(parsed.filtered).toBe(true);
   });
+
+  it("does NOT apply response_filter to error responses", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 400,
+      statusText: "Bad Request",
+      headers: {},
+      body: { message: "CN mismatch", code: 3, details: ["cert error"] },
+    });
+
+    const result = await handleCallApi(config, {
+      method: "POST",
+      path: "/api/test",
+      response_filter: "items",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    // Full error body should be returned, not filtered
+    expect(parsed.body.message).toBe("CN mismatch");
+    expect(parsed.body.code).toBe(3);
+    expect(parsed.body.details).toEqual(["cert error"]);
+    expect(parsed.filtered).toBeUndefined();
+  });
+
+  it("includes filter_warning when response_filter matches nothing", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }], metadata: { total: 1 } },
+    });
+
+    const result = await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+      response_filter: "nonexistent_field",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.filter_warning).toContain("matched no fields");
+    expect(parsed.filter_warning).toContain("items");
+    expect(parsed.filter_warning).toContain("metadata");
+  });
 });
 
 describe("filterResponse", () => {
@@ -174,40 +214,47 @@ describe("filterResponse", () => {
   };
 
   it("extracts top-level fields", () => {
-    const result = filterResponse(data, "metadata") as any;
-    expect(result.metadata).toEqual({ total: 2, page: 1 });
-    expect(result.items).toBeUndefined();
-    expect(result.extra).toBeUndefined();
+    const { filtered } = filterResponse(data, "metadata");
+    expect((filtered as any).metadata).toEqual({ total: 2, page: 1 });
+    expect((filtered as any).items).toBeUndefined();
   });
 
   it("extracts multiple top-level fields", () => {
-    const result = filterResponse(data, "items,metadata") as any;
-    expect(result.items).toHaveLength(2);
-    expect(result.metadata).toEqual({ total: 2, page: 1 });
-    expect(result.extra).toBeUndefined();
+    const { filtered } = filterResponse(data, "items,metadata");
+    expect((filtered as any).items).toHaveLength(2);
+    expect((filtered as any).metadata).toEqual({ total: 2, page: 1 });
+    expect((filtered as any).extra).toBeUndefined();
   });
 
   it("extracts nested fields via dot notation", () => {
-    const result = filterResponse(data, "metadata.total") as any;
-    expect(result.metadata.total).toBe(2);
-    expect(result.metadata.page).toBeUndefined();
+    const { filtered } = filterResponse(data, "metadata.total");
+    expect((filtered as any).metadata.total).toBe(2);
+    expect((filtered as any).metadata.page).toBeUndefined();
   });
 
   it("extracts array fields with [] notation", () => {
-    const result = filterResponse(data, "items[].name") as any;
-    expect(result.items).toEqual([{ name: "a" }, { name: "b" }]);
+    const { filtered } = filterResponse(data, "items[].name");
+    expect((filtered as any).items).toEqual([{ name: "a" }, { name: "b" }]);
   });
 
   it("returns body unchanged when filter is empty", () => {
-    expect(filterResponse(data, "")).toEqual(data);
+    const { filtered } = filterResponse(data, "");
+    expect(filtered).toEqual(data);
   });
 
   it("returns body unchanged for non-object body", () => {
-    expect(filterResponse("string-body", "items")).toBe("string-body");
+    const { filtered } = filterResponse("string-body", "items");
+    expect(filtered).toBe("string-body");
   });
 
-  it("handles missing fields gracefully", () => {
-    const result = filterResponse(data, "nonexistent") as any;
-    expect(result.nonexistent).toBeUndefined();
+  it("reports matchedAny=false when no fields match", () => {
+    const { filtered, matchedAny } = filterResponse(data, "nonexistent");
+    expect(matchedAny).toBe(false);
+    expect((filtered as any).nonexistent).toBeUndefined();
+  });
+
+  it("reports matchedAny=true when fields match", () => {
+    const { matchedAny } = filterResponse(data, "items");
+    expect(matchedAny).toBe(true);
   });
 });
