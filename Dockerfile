@@ -2,14 +2,12 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files and install dependencies
 COPY package.json ./
 RUN npm install
 
 # Copy pre-downloaded specs (downloaded outside Docker or via build script)
 COPY f5-api/ ./f5-api/
 
-# Copy source code
 COPY tsconfig.json ./
 COPY src/ ./src/
 COPY scripts/ ./scripts/
@@ -21,19 +19,25 @@ RUN npx tsc
 # --- Runtime stage ---
 FROM node:20-alpine
 
+RUN addgroup -g 1001 -S appuser && adduser -S appuser -u 1001
+
 WORKDIR /app
 
-# Copy only what's needed at runtime
 COPY package.json ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev && chown -R appuser:appuser /app
 
-COPY --from=builder /app/dist/ ./dist/
-COPY --from=builder /app/data/ ./data/
-COPY --from=builder /app/f5-api/ ./f5-api/
+COPY --from=builder --chown=appuser:appuser /app/dist/ ./dist/
+COPY --from=builder --chown=appuser:appuser /app/data/ ./data/
+COPY --from=builder --chown=appuser:appuser /app/f5-api/ ./f5-api/
 
 ENV NODE_ENV=production
 
-# Expose port for HTTP transport mode (unused in stdio mode)
+USER appuser
+
+# Port 3000 used only when MCP_TRANSPORT=http
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "process.exit(0)"
 
 ENTRYPOINT ["node", "dist/src/index.js"]

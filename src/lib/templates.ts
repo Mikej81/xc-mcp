@@ -158,15 +158,99 @@ const CERTIFICATE: ResourceTemplate = {
   },
 };
 
+const TCP_LB: ResourceTemplate = {
+  description: "TCP load balancer with origin pool",
+  example_body: {
+    metadata: { name: "<REPLACE>", namespace: "<REPLACE>" },
+    spec: {
+      listen_port: 443,
+      dns_volterra_managed: true,
+      domains: ["<REPLACE: domain>"],
+      advertise_on_public_default_vip: {},
+      default_pool_list: {
+        pools: [
+          {
+            pool: { namespace: "<REPLACE>", name: "<REPLACE: origin pool name>" },
+            priority: 1, weight: 1,
+          },
+        ],
+      },
+      retract_cluster: {},
+      hash_policy_choice_round_robin: {},
+    },
+  },
+};
+
+const HEALTHCHECK: ResourceTemplate = {
+  description: "HTTP health check",
+  example_body: {
+    metadata: { name: "<REPLACE>", namespace: "<REPLACE>" },
+    spec: {
+      http_health_check: {
+        use_origin_server_name: {},
+        path: "/",
+        use_http2: false,
+      },
+      timeout: 3,
+      interval: 15,
+      unhealthy_threshold: 3,
+      healthy_threshold: 2,
+    },
+  },
+};
+
+const DNS_ZONE: ResourceTemplate = {
+  description: "DNS zone (primary)",
+  example_body: {
+    metadata: { name: "<REPLACE>", namespace: "<REPLACE>" },
+    spec: {
+      primary: {
+        default_soa_parameters: {},
+        dnssec_mode: { disable: {} },
+        rr_set_group: [],
+      },
+    },
+  },
+};
+
+const SERVICE_POLICY: ResourceTemplate = {
+  description: "Service policy with allow/deny rules",
+  example_body: {
+    metadata: { name: "<REPLACE>", namespace: "<REPLACE>" },
+    spec: {
+      algo: "FIRST_MATCH",
+      any_server: {},
+      rule_list: {
+        rules: [
+          {
+            metadata: { name: "<REPLACE: rule name>" },
+            spec: {
+              action: "ALLOW",
+              any_client: {},
+              any_ip: {},
+              challenge_action: "DEFAULT_CHALLENGE",
+              waf_action: { none: {} },
+            },
+          },
+        ],
+      },
+    },
+  },
+};
+
 /**
  * Map of resource type (from API path) to templates.
  * Multiple templates per type when there are common variants.
  */
 const TEMPLATES: Record<string, ResourceTemplate[]> = {
   http_loadbalancers: [HTTPS_LB_AUTO_CERT, HTTPS_LB_WITH_CERT],
+  tcp_loadbalancers: [TCP_LB],
   origin_pools: [ORIGIN_POOL, ORIGIN_POOL_K8S],
   app_firewalls: [APP_FIREWALL],
   certificates: [CERTIFICATE],
+  healthchecks: [HEALTHCHECK],
+  dns_zones: [DNS_ZONE],
+  service_policys: [SERVICE_POLICY],
 };
 
 /**

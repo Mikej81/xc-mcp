@@ -161,8 +161,8 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_list_resources",
-    "List resources in a namespace. Call directly for common types: http_loadbalancers, " +
-      "origin_pools, healthchecks, app_firewalls, certificates, dns_zones.",
+    "List resources in a namespace. Common types: http_loadbalancers, tcp_loadbalancers, " +
+      "origin_pools, healthchecks, app_firewalls, certificates, dns_zones, service_policys.",
     {
       namespace: z.string().optional().describe("Namespace (optional if default configured)"),
       resource_type: z.string().describe('Resource type. Example: "http_loadbalancers"'),
@@ -256,6 +256,24 @@ async function startStdio(config: ServerConfig, index: OperationsIndex) {
 async function startHttp(config: ServerConfig, index: OperationsIndex) {
   const port = parseInt(process.env.MCP_HTTP_PORT || "3000", 10);
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const sessionLastActive = new Map<string, number>();
+  const SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
+
+  // Periodic cleanup of idle sessions
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [sid, lastActive] of sessionLastActive) {
+      if (now - lastActive > SESSION_IDLE_MS) {
+        const transport = transports.get(sid);
+        if (transport) {
+          transport.close().catch(() => {});
+          transports.delete(sid);
+        }
+        sessionLastActive.delete(sid);
+        console.error(`Session ${sid} cleaned up (idle ${Math.round((now - lastActive) / 60000)}m)`);
+      }
+    }
+  }, 60_000); // Check every minute
 
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${port}`);
@@ -288,6 +306,7 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
     if (req.method === "POST") {
       // Existing session
       if (sessionId && transports.has(sessionId)) {
+        sessionLastActive.set(sessionId, Date.now());
         const transport = transports.get(sessionId)!;
         await transport.handleRequest(req, res, body);
         return;
@@ -299,12 +318,16 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             transports.set(sid, transport);
+            sessionLastActive.set(sid, Date.now());
           },
         });
 
         transport.onclose = () => {
           const sid = transport.sessionId;
-          if (sid) transports.delete(sid);
+          if (sid) {
+            transports.delete(sid);
+            sessionLastActive.delete(sid);
+          }
         };
 
         const server = createMcpServer(config, index);
@@ -353,6 +376,7 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
 
   process.on("SIGINT", async () => {
     console.error("Shutting down...");
+    clearInterval(cleanupInterval);
     for (const [sid, transport] of transports) {
       await transport.close();
       transports.delete(sid);
