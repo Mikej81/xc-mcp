@@ -108,6 +108,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       operation_key: z.string().describe('Format: "METHOD:/path". Example: "POST:/api/config/namespaces/{namespace}/http_loadbalancers"'),
       max_depth: z.number().optional().describe("Schema depth (default 4, max 10)"),
       include_response_schema: z.boolean().optional().describe("Include response schema (default false)"),
+      include_full_schema: z.boolean().optional().describe("Return full schema instead of templates for known resource types (default false)"),
       summary_mode: z.boolean().optional().describe("Strip descriptions, keep only types/required/enums (default false)"),
     },
     async (params) => handleOperationDetails(index, config.specsDir, params),
@@ -117,7 +118,8 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     "xc_call_api",
     "Execute an F5 XC API call. For common operations you can call this directly -- " +
       "standard path pattern: /api/config/namespaces/{namespace}/{resource_type} for GET/list, " +
-      "add /{name} for individual resources. PEM keys in certificate bodies are auto-blindfold-encrypted.",
+      "add /{name} for individual resources. PEM keys in certificate bodies are auto-blindfold-encrypted. " +
+      "Always use blindfold_secret_info for private keys, never clear_secret_info.",
     {
       method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).describe("HTTP method"),
       path: z.string().describe('API path. Example: "/api/config/namespaces/{namespace}/http_loadbalancers"'),

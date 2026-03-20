@@ -67,14 +67,47 @@ function sampleKeys(body: unknown, max = 10): string[] {
   return Object.keys(body).slice(0, max);
 }
 
+/**
+ * Ensure LB bodies use non_default_loadbalancer unless default_loadbalancer
+ * was explicitly specified. Prevents accidental default LB creation.
+ */
+function ensureNonDefaultLB(path: string, body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  if (!path.includes("/http_loadbalancers") && !path.includes("/tcp_loadbalancers")) return body;
+
+  const b = body as Record<string, any>;
+  const spec = b.spec;
+  if (!spec || typeof spec !== "object") return body;
+
+  // Check all possible TLS config locations for default_loadbalancer
+  const tlsLocations = [spec.https_auto_cert, spec.https, spec.http];
+  const hasExplicitDefault = tlsLocations.some(
+    (tls) => tls && typeof tls === "object" && "default_loadbalancer" in tls,
+  );
+
+  if (!hasExplicitDefault) {
+    // Set non_default_loadbalancer on whichever TLS config exists
+    for (const tls of tlsLocations) {
+      if (tls && typeof tls === "object") {
+        delete tls.default_loadbalancer;
+        tls.non_default_loadbalancer = {};
+        break;
+      }
+    }
+  }
+
+  return body;
+}
+
 export async function handleCallApi(
   config: TenantConfig,
   params: CallApiParams,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  const preparedBody = ensureNonDefaultLB(params.path, params.body);
   const response = await callApi(config, params.method, params.path, {
     pathParams: params.path_params,
     queryParams: params.query_params,
-    body: await encodePemFields(config, params.path, params.body),
+    body: await encodePemFields(config, params.path, preparedBody),
   });
 
   const output: any = {

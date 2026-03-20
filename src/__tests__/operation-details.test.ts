@@ -135,12 +135,13 @@ describe("handleOperationDetails", () => {
       operation_key: "POST:/api/config/namespaces/{namespace}/certificates",
     });
     const parsed = JSON.parse(result.content[0].text);
+    // Certificate POST returns templates with notes
     expect(parsed.notes).toBeDefined();
     expect(parsed.notes[0]).toContain("AUTOMATIC ENCRYPTION");
-    expect(parsed.notes[0]).toContain("blindfold-encrypt");
-    expect(parsed.notes[0]).toContain("clear_secret_info");
-    expect(parsed.notes[1]).toContain("PKCS1");
-    expect(parsed.notes[1]).toContain("PKCS8");
+    expect(parsed.notes[0]).toContain("blindfold");
+    // Templates should be included
+    expect(parsed.templates).toBeDefined();
+    expect(parsed.templates.length).toBeGreaterThan(0);
   });
 
   it("does not add PEM note for non-certificate operations", () => {

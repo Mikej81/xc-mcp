@@ -2,6 +2,7 @@ import type { OperationsIndex, OperationDetailsParams } from "../types/index.js"
 import { findOperation } from "../lib/spec-index.js";
 import { getOperationSchema } from "../lib/schema-resolver.js";
 import { MAX_SCHEMA_OUTPUT } from "../lib/constants.js";
+import { getTemplatesForPath } from "../lib/templates.js";
 
 export function handleOperationDetails(
   index: OperationsIndex,
@@ -22,6 +23,43 @@ export function handleOperationDetails(
     };
   }
 
+  // Check for templates first — if available for POST/PUT on known resource types,
+  // return templates instead of the full schema (saves ~10k tokens for complex resources)
+  const templates = getTemplatesForPath(entry.path);
+  const isCreateOrUpdate = entry.method === "POST" || entry.method === "PUT";
+
+  if (templates && isCreateOrUpdate && !params.include_full_schema) {
+    const output: any = {
+      operation: params.operation_key,
+      summary: entry.summary,
+      category: entry.category,
+      usage: {
+        tool: "xc_call_api",
+        method: entry.method,
+        path: entry.path,
+        pathParams: entry.pathParams,
+      },
+      templates: templates.map((t) => ({
+        description: t.description,
+        example_body: t.example_body,
+      })),
+      note: "Use one of the templates above — replace <REPLACE> values. " +
+        "For full schema, call again with include_full_schema: true.",
+    };
+
+    // Add certificate notes
+    if (entry.path.includes("/certificates")) {
+      output.notes = [
+        "AUTOMATIC ENCRYPTION: Put raw PEM private key at spec.private_key.blindfold_secret_info.location " +
+          "and raw PEM certificate at spec.certificate_url. The MCP server auto-blindfold-encrypts " +
+          "the key and base64-encodes the cert. NEVER use clear_secret_info — always use blindfold_secret_info.",
+      ];
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify(output) }] };
+  }
+
+  // Full schema path — used for non-templated resources or when explicitly requested
   const maxDepth = params.max_depth != null ? Math.min(Math.max(params.max_depth, 1), 10) : undefined;
   const useSummary = params.summary_mode === true;
   const schema = getOperationSchema(specsDir, entry.specFile, entry.method, entry.path, maxDepth, useSummary);
@@ -56,25 +94,29 @@ export function handleOperationDetails(
     },
   };
 
-  // Only include description in non-summary mode
   if (!useSummary) {
     output.description = schema.description;
   }
 
-  // Only include response schema when explicitly requested (defaults to omitted)
   if (includeResponses) {
     output.responses = schema.responses;
+  }
+
+  // Include templates alongside schema if available
+  if (templates && isCreateOrUpdate) {
+    output.templates = templates.map((t) => ({
+      description: t.description,
+      example_body: t.example_body,
+    }));
   }
 
   // Add notes for certificate operations
   if (entry.path.includes("/certificates") && entry.hasRequestBody) {
     output.notes = output.notes || [];
     output.notes.push(
-      "AUTOMATIC ENCRYPTION: The MCP server automatically handles PEM encoding and blindfold encryption. " +
-        "Just put the raw PEM private key at spec.private_key.clear_secret_info.url and the raw PEM " +
-        "certificate at spec.certificate_url. The server will: (1) blindfold-encrypt the private key " +
-        "using the tenant's public key and move it to blindfold_secret_info.location, (2) base64-encode " +
-        "the certificate with string:/// prefix. No manual encryption or encoding needed.",
+      "AUTOMATIC ENCRYPTION: Put raw PEM private key at spec.private_key.blindfold_secret_info.location " +
+        "and raw PEM certificate at spec.certificate_url. The MCP server auto-blindfold-encrypts " +
+        "the key and base64-encodes the cert. NEVER use clear_secret_info — always use blindfold_secret_info.",
     );
     output.notes.push(
       "Both PKCS1 (BEGIN RSA PRIVATE KEY) and PKCS8 (BEGIN PRIVATE KEY) formats are accepted.",

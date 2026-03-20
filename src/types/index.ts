@@ -42,6 +42,7 @@ export interface OperationDetailsParams {
   operation_key: string;
   max_depth?: number;
   include_response_schema?: boolean;
+  include_full_schema?: boolean;
   summary_mode?: boolean;
 }
 
