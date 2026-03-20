@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.9 -- 2026-03-20
+
+### xc_create_cert tool, resource templates, LB defaults, token optimization
+
+- **New `xc_create_cert` tool** -- generates a self-signed certificate, blindfold-encrypts the private key, and creates the certificate object in XC, all server-side. No PEM content passes through the LLM conversation. Returns a ready-to-use object reference for LB configs
+- **Resource templates** -- `xc_get_operation_details` now returns compact example bodies (~50 lines) instead of full schemas (~630 lines) for common create operations: HTTP LBs (auto-cert and custom cert), origin pools (public IP and K8s), app firewalls, and certificates. Saves ~10k tokens per schema lookup. Use `include_full_schema: true` to get the full schema when needed
+- **LB body defaults** -- `xc_call_api` automatically sets `non_default_loadbalancer` and `port: 443` on HTTPS LB create/update unless explicitly overridden
+- **Blindfold-only enforcement** -- all templates, tool descriptions, and notes reference `blindfold_secret_info` exclusively; `clear_secret_info` is never suggested. Tool description explicitly states "always use blindfold_secret_info, never clear_secret_info"
+- **Correct HTTPS LB cert structure** -- templates use `tls_cert_params.certificates[]` (object refs) for custom certs, matching actual XC API behavior
+- **Trimmed tool descriptions** -- ~28% reduction in per-turn tool schema overhead; discovery tool now says "only needed when you don't know the API path"
+- **Skip truncation for list tools** -- `xc_list_resources` and `xc_list_namespaces` now read full API responses (no 50KB truncation), ensuring all items are returned from large namespaces
+- **Unit tests** -- 157 tests across 15 test files (up from 154/14)
+
 ## 0.0.8 -- 2026-03-20
 
 ### Code quality, token optimization, and reliability

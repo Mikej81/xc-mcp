@@ -20,6 +20,7 @@ const HTTPS_LB_AUTO_CERT: ResourceTemplate = {
       https_auto_cert: {
         http_redirect: true,
         add_hsts: false,
+        port: 443,
         tls_config: { default_security: {} },
         no_mtls: {},
         default_header: {},
@@ -44,26 +45,21 @@ const HTTPS_LB_AUTO_CERT: ResourceTemplate = {
 };
 
 const HTTPS_LB_WITH_CERT: ResourceTemplate = {
-  description: "HTTPS LB with custom certificate object reference, WAF, and origin pool. Create the certificate object first using the certificates template.",
+  description: "HTTPS LB with custom certificate object. Use xc_create_cert to generate and create the cert, then reference it by name.",
   example_body: {
     metadata: { name: "<REPLACE>", namespace: "<REPLACE>" },
     spec: {
       domains: ["<REPLACE: domain>"],
       https: {
         http_redirect: true,
-        add_hsts: false,
-        tls_config: { default_security: {} },
-        tls_certificates: [
-          {
-            certificate_url: "<REPLACE: raw PEM cert -- auto-encoded by MCP>",
-            private_key: {
-              blindfold_secret_info: {
-                location: "<REPLACE: raw PEM key -- auto-blindfold-encrypted by MCP>",
-              },
-            },
-          },
-        ],
-        no_mtls: {},
+        port: 443,
+        tls_cert_params: {
+          certificates: [
+            { namespace: "<REPLACE>", name: "<REPLACE: certificate object name>" },
+          ],
+          no_mtls: {},
+          tls_config: { default_security: {} },
+        },
         default_header: {},
         enable_path_normalize: {},
         non_default_loadbalancer: {},

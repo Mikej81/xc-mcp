@@ -18,6 +18,7 @@ import { handleOperationDetails } from "./tools/operation-details.js";
 import { handleCallApi } from "./tools/call-api.js";
 import { handleListNamespaces } from "./tools/list-namespaces.js";
 import { handleListResources } from "./tools/list-resources.js";
+import { handleCreateCert } from "./tools/create-cert.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -178,6 +179,23 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
         return { content: [{ type: "text", text: ns.guidance }] };
       }
       return handleListResources(tenant, { ...params, namespace: ns });
+    },
+  );
+
+  server.tool(
+    "xc_create_cert",
+    "Generate a self-signed certificate and create it in XC with blindfold-encrypted private key. " +
+      "No PEM handling needed — cert is generated and encrypted server-side.",
+    {
+      name: z.string().describe("Certificate object name"),
+      namespace: z.string().describe("Namespace"),
+      domain: z.string().describe("Domain for the CN (e.g. mcp.myedgedemo.com)"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleCreateCert(tenant, params);
     },
   );
 

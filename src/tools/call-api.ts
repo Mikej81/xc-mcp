@@ -68,10 +68,11 @@ function sampleKeys(body: unknown, max = 10): string[] {
 }
 
 /**
- * Ensure LB bodies use non_default_loadbalancer unless default_loadbalancer
- * was explicitly specified. Prevents accidental default LB creation.
+ * Apply LB body defaults:
+ * - non_default_loadbalancer unless default_loadbalancer explicitly set
+ * - port: 443 on https/https_auto_cert unless already specified
  */
-function ensureNonDefaultLB(path: string, body: unknown): unknown {
+function prepareLBBody(path: string, body: unknown): unknown {
   if (!body || typeof body !== "object") return body;
   if (!path.includes("/http_loadbalancers") && !path.includes("/tcp_loadbalancers")) return body;
 
@@ -79,19 +80,17 @@ function ensureNonDefaultLB(path: string, body: unknown): unknown {
   const spec = b.spec;
   if (!spec || typeof spec !== "object") return body;
 
-  // Check all possible TLS config locations for default_loadbalancer
   const tlsLocations = [spec.https_auto_cert, spec.https, spec.http];
-  const hasExplicitDefault = tlsLocations.some(
-    (tls) => tls && typeof tls === "object" && "default_loadbalancer" in tls,
-  );
 
-  if (!hasExplicitDefault) {
-    // Set non_default_loadbalancer on whichever TLS config exists
-    for (const tls of tlsLocations) {
-      if (tls && typeof tls === "object") {
-        delete tls.default_loadbalancer;
+  for (const tls of tlsLocations) {
+    if (tls && typeof tls === "object") {
+      // Default to non_default_loadbalancer
+      if (!("default_loadbalancer" in tls) && !("non_default_loadbalancer" in tls)) {
         tls.non_default_loadbalancer = {};
-        break;
+      }
+      // Default port to 443 for HTTPS
+      if (!("port" in tls) && (tls === spec.https || tls === spec.https_auto_cert)) {
+        tls.port = 443;
       }
     }
   }
@@ -103,7 +102,7 @@ export async function handleCallApi(
   config: TenantConfig,
   params: CallApiParams,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-  const preparedBody = ensureNonDefaultLB(params.path, params.body);
+  const preparedBody = prepareLBBody(params.path, params.body);
   const response = await callApi(config, params.method, params.path, {
     pathParams: params.path_params,
     queryParams: params.query_params,
