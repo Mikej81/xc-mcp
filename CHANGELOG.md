@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.8 -- 2026-03-20
+
+### Code quality, token optimization, and reliability
+
+- **Compact JSON output** -- removed pretty-print (`null, 2`) from `xc_call_api` and `xc_get_operation_details` output, saving ~20% tokens per response
+- **Compact discover output** -- operations now displayed as single-line entries instead of 4-5 lines each, ~60% smaller discovery results
+- **Shared constants** -- extracted `MAX_RESPONSE_SIZE`, `MAX_TOOL_OUTPUT`, `MAX_SCHEMA_OUTPUT`, `REQUEST_TIMEOUT_MS` into `src/lib/constants.ts`
+- **Blindfold fetch timeout** -- added 30s AbortController timeout to `fetchBlindfoldParams()`, preventing indefinite hangs on certificate uploads
+- **Removed `as any` cast** -- explicit param destructuring in `xc_call_api` handler for type safety
+- **Consolidated schema summarization** -- removed duplicate `summarizeSchema()` from operation-details; schema-resolver now accepts a `summarize` flag controlling which scalar fields are kept
+- **O(1) operation lookup** -- `findOperation()` now uses a pre-built Map for constant-time lookups across 1,764 operations
+- **Unit tests** -- 154 tests across 14 test files (up from 153/14)
+
 ## 0.0.7 -- 2026-03-12
 
 ### QA remediation
