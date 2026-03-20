@@ -117,3 +117,5 @@ typings/
 
 example/
 demo/
+
+.DS*

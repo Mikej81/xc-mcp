@@ -9,19 +9,27 @@ Instead of registering thousands of individual tools, this server exposes **6 sm
 | Tool | What It Does |
 |------|--------------|
 | `xc_discover_apis` | Search/browse API operations by keyword, category, HTTP method |
-| `xc_get_operation_details` | Get full parameter and schema details for any operation |
-| `xc_call_api` | Execute any F5 XC API call |
-| `xc_list_namespaces` | Quick-list all namespaces in your tenant |
-| `xc_list_resources` | Quick-list resources of a type in a namespace |
-| `xc_list_tenants` | List all configured tenants and their URLs |
+| `xc_get_operation_details` | Get schema details with `summary_mode` and `max_depth` control |
+| `xc_call_api` | Execute any API call with `response_filter` for large responses |
+| `xc_list_namespaces` | List namespaces with `prefix` and `label_selector` filtering |
+| `xc_list_resources` | List resources with `fields` projection and `max_items` limit |
+| `xc_list_tenants` | List configured tenants, server version, and update status |
 
 **Typical workflow:** The AI calls `xc_discover_apis` to find relevant endpoints > `xc_get_operation_details` to understand the schema > `xc_call_api` to make the actual request.
 
-### Handling large responses and complex schemas
+### Token optimization
 
-- **Response filtering:** Large API responses (like quota endpoints) can be truncated at 50KB. Use the `response_filter` parameter on `xc_call_api` to extract only the fields you need — e.g., `"items[].name,items[].labels"`.
-- **Schema depth control:** Complex resources like HTTP load balancers have deeply nested schemas that get truncated at the default depth of 4. Use `max_depth` on `xc_get_operation_details` (up to 10) to see deeper fields like origin_server types and advertise options.
-- **Oneof constraints:** The F5 XC API uses mutually exclusive field groups (e.g., pick one of `custom_hash_algorithms`, `disable_ocsp_stapling`, or `use_system_defaults`). These are now shown in the schema output as `x-ves-oneof-field-*` arrays.
+The server is designed to minimize LLM context consumption:
+
+- **Response filtering:** Use `response_filter` on `xc_call_api` to extract specific fields from large responses — e.g., `"items[].name,items[].labels"` extracts 200 bytes from a 50KB response. Never applied to error responses (4xx/5xx always return the full body).
+- **Summary mode:** Use `summary_mode: true` on `xc_get_operation_details` to strip descriptions, examples, and validation rules — ~60% smaller schemas with only types, required fields, enums, and oneof groups.
+- **Response schema omitted by default:** `xc_get_operation_details` omits the response schema (which typically duplicates the request schema). Set `include_response_schema: true` to include it.
+- **Schema depth control:** Use `max_depth` (up to 10, default 4) to control how deep nested schemas are resolved.
+- **Field projection:** Use `fields` on `xc_list_resources` to extract specific per-item data — e.g., `["spec.origin_servers", "system_metadata.creation_timestamp"]`.
+- **Namespace filtering:** Use `prefix` on `xc_list_namespaces` to filter by name prefix, reducing output on tenants with 100+ namespaces.
+- **Item limits:** Use `max_items` on `xc_list_resources` to cap the number of items returned.
+- **Compact output:** All JSON output uses compact serialization (no whitespace), saving ~20% tokens per response.
+- **Oneof constraints:** F5 XC `x-ves-oneof-field-*` extensions are preserved in schema output so the LLM knows which fields are mutually exclusive.
 
 ## Prerequisites
 
@@ -314,8 +322,12 @@ XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.i
 
 ## Architecture
 
-- **Build time:** `scripts/build-index.ts` parses all 268 OpenAPI spec files > generates `data/operations-index.json` (searchable index)
-- **Runtime:** Index loads into memory. Full schemas resolved on-demand from original spec files when `xc_get_operation_details` is called (depth-limited `$ref` resolution)
+- **Build time:** `scripts/build-index.ts` parses all 268 OpenAPI spec files > generates `data/operations-index.json` (searchable index with O(1) lookup)
+- **Runtime:** Index loads into memory. Full schemas resolved on-demand from original spec files when `xc_get_operation_details` is called (depth-limited `$ref` resolution, configurable via `max_depth`)
 - **Auth:** All API calls include `Authorization: APIToken <token>` automatically
-- **Safety:** Responses truncated at 50KB to prevent overwhelming the AI context window
+- **Certificates:** PEM private keys are automatically blindfold-encrypted via the F5 XC secret management API (RSA+AES-GCM envelope encryption)
+- **Safety:** Responses truncated at 50KB to prevent overwhelming the AI context window; `response_filter` extracts specific fields before truncation
+- **Token optimization:** Compact JSON output, summary mode for schemas, field projection for lists, namespace prefix filtering
+- **Version check:** On startup and via `xc_list_tenants`, the server checks GitHub for newer releases
 - **Transports:** stdio (subprocess, used by Claude Code) and Streamable HTTP (remote, used by ChatGPT)
+- **Tests:** 154 unit tests across 14 test files
