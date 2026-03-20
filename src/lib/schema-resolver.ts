@@ -36,7 +36,19 @@ function resolveRef(spec: any, ref: string): any {
  * Recursively resolve $ref pointers and inline schemas up to a max depth.
  * Returns a simplified schema object suitable for LLM consumption.
  */
-function resolveSchema(spec: any, schema: any, depth: number, visited: Set<string>, maxDepth: number = DEFAULT_MAX_DEPTH): any {
+/** Fields kept in full mode. */
+const FULL_SCALAR_KEYS = new Set([
+  "type", "format", "description", "title", "enum", "default", "required",
+  "minimum", "maximum", "minLength", "maxLength", "pattern",
+  "name", "in", "x-displayname", "x-ves-example",
+]);
+
+/** Fields kept in summary mode (types + required + enums only). */
+const SUMMARY_SCALAR_KEYS = new Set([
+  "type", "format", "enum", "default", "required", "name", "in",
+]);
+
+function resolveSchema(spec: any, schema: any, depth: number, visited: Set<string>, maxDepth: number = DEFAULT_MAX_DEPTH, summarize = false): any {
   if (!schema || typeof schema !== "object") return schema;
   if (depth >= maxDepth) return { _note: "Schema truncated at max depth" };
 
@@ -49,49 +61,45 @@ function resolveSchema(spec: any, schema: any, depth: number, visited: Set<strin
     visited.add(ref);
     const resolved = resolveRef(spec, ref);
     if (!resolved) return { _note: `Unresolved ref: ${ref}` };
-    return resolveSchema(spec, resolved, depth, visited, maxDepth);
+    return resolveSchema(spec, resolved, depth, visited, maxDepth, summarize);
   }
 
   // Handle arrays
   if (Array.isArray(schema)) {
-    return schema.map((item) => resolveSchema(spec, item, depth, visited, maxDepth));
+    return schema.map((item) => resolveSchema(spec, item, depth, visited, maxDepth, summarize));
   }
 
   const result: any = {};
+  const allowedKeys = summarize ? SUMMARY_SCALAR_KEYS : FULL_SCALAR_KEYS;
 
   for (const [key, value] of Object.entries(schema)) {
     if (key === "properties" && typeof value === "object" && value !== null) {
       result.properties = {};
       for (const [propName, propSchema] of Object.entries(value as Record<string, any>)) {
-        result.properties[propName] = resolveSchema(spec, propSchema, depth + 1, visited, maxDepth);
+        result.properties[propName] = resolveSchema(spec, propSchema, depth + 1, visited, maxDepth, summarize);
       }
     } else if (key === "items" && typeof value === "object") {
-      result.items = resolveSchema(spec, value, depth + 1, visited, maxDepth);
+      result.items = resolveSchema(spec, value, depth + 1, visited, maxDepth, summarize);
     } else if (key === "additionalProperties" && typeof value === "object") {
-      result.additionalProperties = resolveSchema(spec, value, depth + 1, visited, maxDepth);
+      result.additionalProperties = resolveSchema(spec, value, depth + 1, visited, maxDepth, summarize);
     } else if (key === "schema" && typeof value === "object") {
-      result.schema = resolveSchema(spec, value, depth + 1, visited, maxDepth);
+      result.schema = resolveSchema(spec, value, depth + 1, visited, maxDepth, summarize);
     } else if (key === "content" && typeof value === "object") {
-      // Handle content (e.g., application/json in request bodies and responses)
       result.content = {};
       for (const [mediaType, mediaObj] of Object.entries(value as Record<string, any>)) {
         if (mediaObj && typeof mediaObj === "object" && mediaObj.schema) {
           result.content[mediaType] = {
-            schema: resolveSchema(spec, mediaObj.schema, depth + 1, visited, maxDepth),
+            schema: resolveSchema(spec, mediaObj.schema, depth + 1, visited, maxDepth, summarize),
           };
         }
       }
     } else if (key === "allOf" || key === "oneOf" || key === "anyOf") {
-      result[key] = (value as any[]).map((v) => resolveSchema(spec, v, depth + 1, visited, maxDepth));
-    } else if (
-      // Copy simple scalar properties and F5 oneof extensions
-      ["type", "format", "description", "title", "enum", "default", "required",
-       "minimum", "maximum", "minLength", "maxLength", "pattern",
-       "name", "in", "x-displayname", "x-ves-example"].includes(key)
-    ) {
+      result[key] = (value as any[]).map((v) => resolveSchema(spec, v, depth + 1, visited, maxDepth, summarize));
+    } else if (allowedKeys.has(key)) {
+      result[key] = value;
+    } else if (key === "_note") {
       result[key] = value;
     } else if (key.startsWith("x-ves-oneof-field-")) {
-      // Preserve F5 XC oneof constraint metadata so the LLM knows which fields are mutually exclusive
       try {
         result[key] = typeof value === "string" ? JSON.parse(value) : value;
       } catch {
@@ -122,6 +130,7 @@ export function getOperationSchema(
   method: string,
   path: string,
   maxDepth: number = DEFAULT_MAX_DEPTH,
+  summarize = false,
 ): OperationSchema | null {
   const spec = loadSpec(specsDir, specFile);
   const pathItem = spec.paths?.[path];
@@ -130,29 +139,27 @@ export function getOperationSchema(
   const operation = pathItem[method.toLowerCase()];
   if (!operation) return null;
 
+  const resolve = (schema: any) => resolveSchema(spec, schema, 0, new Set(), maxDepth, summarize);
+
   // Resolve parameters
   const parameters: any[] = [];
 
-  // Path-level parameters
   if (Array.isArray(pathItem.parameters)) {
     for (const param of pathItem.parameters) {
-      const resolved = resolveSchema(spec, param, 0, new Set(), maxDepth);
-      parameters.push(resolved);
+      parameters.push(resolve(param));
     }
   }
 
-  // Operation-level parameters
   if (Array.isArray(operation.parameters)) {
     for (const param of operation.parameters) {
-      const resolved = resolveSchema(spec, param, 0, new Set(), maxDepth);
-      parameters.push(resolved);
+      parameters.push(resolve(param));
     }
   }
 
   // Resolve request body
   let requestBody = null;
   if (operation.requestBody) {
-    requestBody = resolveSchema(spec, operation.requestBody, 0, new Set(), maxDepth);
+    requestBody = resolve(operation.requestBody);
   }
 
   // Resolve responses (just 200/201 to keep it manageable)
@@ -160,7 +167,7 @@ export function getOperationSchema(
   if (operation.responses) {
     for (const [code, response] of Object.entries(operation.responses)) {
       if (code === "200" || code === "201" || code === "default") {
-        responses[code] = resolveSchema(spec, response, 0, new Set(), maxDepth);
+        responses[code] = resolve(response);
       }
     }
   }

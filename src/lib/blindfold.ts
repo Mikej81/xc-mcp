@@ -32,9 +32,13 @@ export async function fetchBlindfoldParams(
     Accept: "application/json",
   };
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  try {
   const [policyRes, pubKeyRes] = await Promise.all([
-    fetch(new URL(POLICY_URL, tenantUrl).toString(), { headers }),
-    fetch(new URL(PUBLIC_KEY_URL, tenantUrl).toString(), { headers }),
+    fetch(new URL(POLICY_URL, tenantUrl).toString(), { headers, signal: controller.signal }),
+    fetch(new URL(PUBLIC_KEY_URL, tenantUrl).toString(), { headers, signal: controller.signal }),
   ]);
 
   if (!policyRes.ok) {
@@ -62,6 +66,9 @@ export async function fetchBlindfoldParams(
     modulusBase64: pubKeyData.data.modulus_base64,
     exponentBase64: pubKeyData.data.public_exponent_base64,
   };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Constants matching the PowerShell implementation

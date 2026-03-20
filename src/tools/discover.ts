@@ -36,17 +36,12 @@ export function handleDiscover(
   ];
 
   for (const op of results) {
-    lines.push(`- ${op.key}`);
-    lines.push(`  Summary: ${op.summary || "(none)"}`);
-    lines.push(`  Category: ${op.category}`);
-    if (op.pathParams.length > 0) {
-      lines.push(`  Path params: ${op.pathParams.join(", ")}`);
-    }
-    if (op.hasRequestBody) {
-      lines.push(`  Has request body: yes`);
-    }
-    lines.push("");
+    const parts = [op.key, op.summary || "(no summary)", op.category];
+    if (op.pathParams.length > 0) parts.push(`params: ${op.pathParams.join(",")}`);
+    if (op.hasRequestBody) parts.push("has body");
+    lines.push(`- ${parts.join(" | ")}`);
   }
+  lines.push("");
 
   if (total > offset + results.length) {
     lines.push(

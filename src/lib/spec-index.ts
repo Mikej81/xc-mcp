@@ -2,11 +2,13 @@ import { readFileSync } from "node:fs";
 import type { DiscoverParams, OperationIndexEntry, OperationsIndex } from "../types/index.js";
 
 let cachedIndex: OperationsIndex | null = null;
+let operationMap: Map<string, OperationIndexEntry> | null = null;
 
 export function loadIndex(indexPath: string): OperationsIndex {
   if (cachedIndex) return cachedIndex;
   const raw = readFileSync(indexPath, "utf-8");
   cachedIndex = JSON.parse(raw) as OperationsIndex;
+  operationMap = new Map(cachedIndex.operations.map((op) => [op.key, op]));
   return cachedIndex;
 }
 
@@ -57,7 +59,7 @@ export function findOperation(
   index: OperationsIndex,
   key: string,
 ): OperationIndexEntry | undefined {
-  return index.operations.find((op) => op.key === key);
+  return operationMap?.get(key) ?? index.operations.find((op) => op.key === key);
 }
 
 export function getCategories(index: OperationsIndex): { name: string; count: number }[] {

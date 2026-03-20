@@ -1,6 +1,7 @@
 import type { CallApiParams, TenantConfig } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
 import { encodePemFields } from "../lib/pem-encoding.js";
+import { MAX_TOOL_OUTPUT } from "../lib/constants.js";
 
 /**
  * Extract fields from a response body using dot-separated paths.
@@ -102,10 +103,10 @@ export async function handleCallApi(
     output.body = response.body;
   }
 
-  let text = JSON.stringify(output, null, 2);
+  let text = JSON.stringify(output);
 
-  if (text.length > 60_000) {
-    text = text.slice(0, 60_000) + "\n... [Output truncated]";
+  if (text.length > MAX_TOOL_OUTPUT) {
+    text = text.slice(0, MAX_TOOL_OUTPUT) + "\n... [Output truncated]";
   }
 
   return { content: [{ type: "text", text }] };

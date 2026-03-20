@@ -168,7 +168,14 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     async (params) => {
       const tenant = withTenant(config, params.tenant);
       if ("content" in tenant) return tenant;
-      return handleCallApi(tenant, params as any);
+      return handleCallApi(tenant, {
+        method: params.method,
+        path: params.path,
+        path_params: params.path_params,
+        query_params: params.query_params,
+        body: params.body,
+        response_filter: params.response_filter,
+      });
     },
   );
 

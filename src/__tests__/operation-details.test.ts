@@ -92,14 +92,14 @@ describe("handleOperationDetails", () => {
     const result = handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb" });
     const text = result.content[0].text;
     expect(text.length).toBeLessThanOrEqual(50_000 + 50);
-    expect(text).toContain("[Schema truncated at 50KB]");
+    expect(text).toContain("[Schema truncated]");
   });
 
-  it("passes max_depth to getOperationSchema", () => {
+  it("passes max_depth and summarize to getOperationSchema", () => {
     mockGetSchema.mockReturnValue(fullSchema);
     mockGetSchema.mockClear();
     handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 8 });
-    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 8);
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 8, false);
   });
 
   it("clamps max_depth between 1 and 10", () => {
@@ -107,11 +107,11 @@ describe("handleOperationDetails", () => {
 
     mockGetSchema.mockClear();
     handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 99 });
-    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 10);
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 10, false);
 
     mockGetSchema.mockClear();
     handleOperationDetails(index, "/specs", { operation_key: "GET:/api/lb", max_depth: 0 });
-    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 1);
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", 1, false);
   });
 
   it("adds PEM note for certificate operations with request body", () => {
@@ -169,42 +169,26 @@ describe("handleOperationDetails", () => {
     expect(parsed.responses["200"]).toBeDefined();
   });
 
-  it("strips descriptions in summary_mode", () => {
-    mockGetSchema.mockReturnValue({
-      ...fullSchema,
-      parameters: [{ name: "namespace", in: "path", description: "The namespace to use", type: "string" }],
-      requestBody: {
-        content: {
-          "application/json": {
-            schema: {
-              type: "object",
-              description: "Request body for LBs",
-              properties: {
-                name: { type: "string", description: "Name of the LB", "x-ves-example": "my-lb" },
-              },
-            },
-          },
-        },
-      },
+  it("passes summarize=true to getOperationSchema in summary_mode", () => {
+    mockGetSchema.mockReturnValue(fullSchema);
+    mockGetSchema.mockClear();
+    handleOperationDetails(index, "/specs", {
+      operation_key: "GET:/api/lb",
+      summary_mode: true,
     });
+    // Verify summarize flag is passed through
+    expect(mockGetSchema).toHaveBeenLastCalledWith("/specs", "test.json", "GET", "/api/lb", undefined, true);
+  });
 
+  it("omits top-level description in summary_mode", () => {
+    mockGetSchema.mockReturnValue(fullSchema);
     const result = handleOperationDetails(index, "/specs", {
       operation_key: "GET:/api/lb",
       summary_mode: true,
     });
     const parsed = JSON.parse(result.content[0].text);
-    // description should be omitted from top-level output
     expect(parsed.description).toBeUndefined();
-    // parameter descriptions should be stripped
-    expect(parsed.parameters[0].description).toBeUndefined();
-    expect(parsed.parameters[0].name).toBe("namespace");
-    expect(parsed.parameters[0].type).toBe("string");
-    // Nested descriptions and examples should be stripped
-    const bodySchema = parsed.requestBody?.content?.["application/json"]?.schema;
-    expect(bodySchema.description).toBeUndefined();
-    expect(bodySchema.properties.name.description).toBeUndefined();
-    expect(bodySchema.properties.name["x-ves-example"]).toBeUndefined();
-    expect(bodySchema.properties.name.type).toBe("string");
+    expect(parsed.summary).toBe("List load balancers");
   });
 
   it("preserves oneof fields in summary_mode", () => {

@@ -65,13 +65,13 @@ describe("handleDiscover", () => {
   it("shows path params when present", () => {
     const result = handleDiscover(index, { query: "List LBs" });
     const text = result.content[0].text;
-    expect(text).toContain("Path params: namespace");
+    expect(text).toContain("params: namespace");
   });
 
   it("shows request body indicator when present", () => {
     const result = handleDiscover(index, { query: "Create LB" });
     const text = result.content[0].text;
-    expect(text).toContain("Has request body: yes");
+    expect(text).toContain("has body");
   });
 
   it("shows pagination hint when more results exist", () => {

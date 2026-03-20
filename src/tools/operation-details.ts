@@ -1,50 +1,7 @@
 import type { OperationsIndex, OperationDetailsParams } from "../types/index.js";
 import { findOperation } from "../lib/spec-index.js";
 import { getOperationSchema } from "../lib/schema-resolver.js";
-
-/**
- * Strip verbose descriptions and validation rules from a schema,
- * keeping only types, required fields, oneof groups, and enums.
- */
-function summarizeSchema(schema: any): any {
-  if (!schema || typeof schema !== "object") return schema;
-  if (Array.isArray(schema)) return schema.map(summarizeSchema);
-
-  const result: any = {};
-  for (const [key, value] of Object.entries(schema)) {
-    // Keep structural keys
-    if (["type", "format", "enum", "default", "required", "name", "in"].includes(key)) {
-      result[key] = value;
-    } else if (key === "properties" && typeof value === "object" && value !== null) {
-      result.properties = {};
-      for (const [pn, ps] of Object.entries(value as Record<string, any>)) {
-        result.properties[pn] = summarizeSchema(ps);
-      }
-    } else if (key === "items" && typeof value === "object") {
-      result.items = summarizeSchema(value);
-    } else if (key === "additionalProperties" && typeof value === "object") {
-      result.additionalProperties = summarizeSchema(value);
-    } else if (key === "content" && typeof value === "object") {
-      result.content = {};
-      for (const [mt, mo] of Object.entries(value as Record<string, any>)) {
-        if (mo && typeof mo === "object" && mo.schema) {
-          result.content[mt] = { schema: summarizeSchema(mo.schema) };
-        }
-      }
-    } else if (key === "schema" && typeof value === "object") {
-      result.schema = summarizeSchema(value);
-    } else if (key === "allOf" || key === "oneOf" || key === "anyOf") {
-      result[key] = (value as any[]).map(summarizeSchema);
-    } else if (key.startsWith("x-ves-oneof-field-")) {
-      result[key] = value;
-    } else if (key === "_note") {
-      result[key] = value;
-    }
-    // Drop: description, title, x-displayname, x-ves-example, minimum, maximum,
-    // minLength, maxLength, pattern — these are verbose and rarely needed for creation
-  }
-  return result;
-}
+import { MAX_SCHEMA_OUTPUT } from "../lib/constants.js";
 
 export function handleOperationDetails(
   index: OperationsIndex,
@@ -66,7 +23,8 @@ export function handleOperationDetails(
   }
 
   const maxDepth = params.max_depth != null ? Math.min(Math.max(params.max_depth, 1), 10) : undefined;
-  const schema = getOperationSchema(specsDir, entry.specFile, entry.method, entry.path, maxDepth);
+  const useSummary = params.summary_mode === true;
+  const schema = getOperationSchema(specsDir, entry.specFile, entry.method, entry.path, maxDepth, useSummary);
 
   if (!schema) {
     return {
@@ -80,15 +38,14 @@ export function handleOperationDetails(
     };
   }
 
-  const useSummary = params.summary_mode === true;
   const includeResponses = params.include_response_schema === true;
 
   const output: any = {
     operation: params.operation_key,
     summary: schema.summary,
     category: entry.category,
-    parameters: useSummary ? summarizeSchema(schema.parameters) : schema.parameters,
-    requestBody: useSummary ? summarizeSchema(schema.requestBody) : schema.requestBody,
+    parameters: schema.parameters,
+    requestBody: schema.requestBody,
     usage: {
       tool: "xc_call_api",
       method: entry.method,
@@ -106,7 +63,7 @@ export function handleOperationDetails(
 
   // Only include response schema when explicitly requested (defaults to omitted)
   if (includeResponses) {
-    output.responses = useSummary ? summarizeSchema(schema.responses) : schema.responses;
+    output.responses = schema.responses;
   }
 
   // Add notes for certificate operations
@@ -119,10 +76,10 @@ export function handleOperationDetails(
     );
   }
 
-  let text = JSON.stringify(output, null, 2);
+  let text = JSON.stringify(output);
 
-  if (text.length > 50_000) {
-    text = text.slice(0, 50_000) + "\n... [Schema truncated at 50KB]";
+  if (text.length > MAX_SCHEMA_OUTPUT) {
+    text = text.slice(0, MAX_SCHEMA_OUTPUT) + "\n... [Schema truncated]";
   }
 
   return { content: [{ type: "text", text }] };

@@ -1,7 +1,5 @@
 import type { ApiResponse, TenantConfig } from "../types/index.js";
-
-const MAX_RESPONSE_SIZE = 50 * 1024; // 50KB
-const REQUEST_TIMEOUT_MS = 30_000;
+import { MAX_RESPONSE_SIZE, REQUEST_TIMEOUT_MS } from "./constants.js";
 
 /**
  * Substitute path parameters into a URL path template.
