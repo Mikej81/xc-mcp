@@ -31,9 +31,10 @@ export async function callApi(
     pathParams?: Record<string, string>;
     queryParams?: Record<string, string>;
     body?: unknown;
+    skipTruncation?: boolean;
   } = {},
 ): Promise<ApiResponse> {
-  const { pathParams = {}, queryParams = {}, body } = options;
+  const { pathParams = {}, queryParams = {}, body, skipTruncation = false } = options;
 
   const path = substitutePath(pathTemplate, pathParams);
   const url = new URL(path, config.tenantUrl);
@@ -71,11 +72,10 @@ export async function callApi(
     let truncated = false;
     let responseBody: unknown;
 
-    if (text.length > MAX_RESPONSE_SIZE) {
+    if (!skipTruncation && text.length > MAX_RESPONSE_SIZE) {
       truncated = true;
       const truncatedText = text.slice(0, MAX_RESPONSE_SIZE);
       try {
-        // Try to parse what we have -- it might be valid JSON prefix
         responseBody = JSON.parse(truncatedText);
       } catch {
         responseBody = truncatedText + "\n... [TRUNCATED at 50KB]";

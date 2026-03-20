@@ -87,86 +87,45 @@ function withTenant(
 function registerTools(server: McpServer, config: ServerConfig, index: OperationsIndex) {
   server.tool(
     "xc_discover_apis",
-    "Search and browse F5 XC API operations by keyword, category, HTTP method, or resource type. " +
-      "Returns matching operations with method, path, summary, and category. " +
-      "Use xc_get_operation_details to get full schema for a specific operation.",
+    "Search F5 XC API operations. Only needed when you don't know the API path -- " +
+      "for common resources, call xc_list_resources or xc_call_api directly.",
     {
-      query: z.string().optional().describe(
-        "Search text to match against summaries, descriptions, paths, and operation IDs. " +
-          "Multiple words are AND-matched. Examples: 'load balancer', 'create namespace'",
-      ),
-      category: z.string().optional().describe(
-        "Filter by category: AI/ML, API Security, BIG-IP, Billing, Bot Protection, Certificates, " +
-          "Cloud Sites, DDoS Protection, DNS, IAM, Load Balancing, Monitoring, NGINX, Networking, " +
-          "Operations, Other, Security, Support",
-      ),
-      method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).optional().describe("Filter by HTTP method"),
-      resource_type: z.string().optional().describe(
-        "Filter by resource type from the path. Examples: 'http_loadbalancers', 'namespaces'",
-      ),
-      limit: z.number().optional().describe("Max results to return (default 20, max 50)"),
-      offset: z.number().optional().describe("Offset for pagination (default 0)"),
+      query: z.string().optional().describe("Search text (AND-matched). Example: 'load balancer'"),
+      category: z.string().optional().describe("Category filter"),
+      method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).optional().describe("HTTP method filter"),
+      resource_type: z.string().optional().describe("Resource type filter. Example: 'http_loadbalancers'"),
+      limit: z.number().optional().describe("Max results (default 20, max 50)"),
+      offset: z.number().optional().describe("Pagination offset"),
     },
     async (params) => handleDiscover(index, params),
   );
 
   server.tool(
     "xc_get_operation_details",
-    "Get full schema details for a specific F5 XC API operation including parameters and " +
-      "request body schema. Use xc_discover_apis first to find the operation_key. " +
-      "Increase max_depth (default 4) if the schema is truncated and you need to see deeper nested fields. " +
-      "Use summary_mode to reduce token usage by stripping descriptions and validation rules. " +
-      "Note: F5 XC uses x-ves-oneof-field-* to mark mutually exclusive fields -- only set ONE field from each group.",
+    "Get request body schema for an API operation. Use summary_mode=true to reduce size. " +
+      "x-ves-oneof-field-* marks mutually exclusive fields -- only set ONE per group.",
     {
-      operation_key: z.string().describe(
-        'The operation key in "METHOD:path" format from xc_discover_apis. ' +
-          'Example: "GET:/api/config/namespaces/{namespace}/http_loadbalancers"',
-      ),
-      max_depth: z.number().optional().describe(
-        "Maximum schema resolution depth (default 4, max 10). Increase to see deeper nested fields " +
-          "like origin_server types or advertise options in complex resources.",
-      ),
-      include_response_schema: z.boolean().optional().describe(
-        "Include response schema in output (default false). Response schemas are usually similar " +
-          "to request schemas and double the output size. Only enable when you need to inspect response format.",
-      ),
-      summary_mode: z.boolean().optional().describe(
-        "Strip descriptions, examples, and validation rules from the schema (default false). " +
-          "Returns only types, required fields, enums, and oneof groups. Significantly reduces output size.",
-      ),
+      operation_key: z.string().describe('Format: "METHOD:/path". Example: "POST:/api/config/namespaces/{namespace}/http_loadbalancers"'),
+      max_depth: z.number().optional().describe("Schema depth (default 4, max 10)"),
+      include_response_schema: z.boolean().optional().describe("Include response schema (default false)"),
+      summary_mode: z.boolean().optional().describe("Strip descriptions, keep only types/required/enums (default false)"),
     },
     async (params) => handleOperationDetails(index, config.specsDir, params),
   );
 
   server.tool(
     "xc_call_api",
-    "Execute an F5 XC API call. Use xc_discover_apis and xc_get_operation_details first " +
-      "to understand the endpoint. Supports all HTTP methods with path params, query params, and body. " +
-      "When a default namespace is configured, it can be used for the {namespace} path parameter if not explicitly provided. " +
-      "CERTIFICATES: Raw PEM private keys in the request body are automatically blindfold-encrypted " +
-      "(RSA+AES-GCM) before transmission -- just put the raw PEM in spec.private_key.clear_secret_info.url " +
-      "and the server handles encryption. Certificate PEM values at spec.certificate_url are auto-base64-encoded.",
+    "Execute an F5 XC API call. For common operations you can call this directly -- " +
+      "standard path pattern: /api/config/namespaces/{namespace}/{resource_type} for GET/list, " +
+      "add /{name} for individual resources. PEM keys in certificate bodies are auto-blindfold-encrypted.",
     {
       method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).describe("HTTP method"),
-      path: z.string().describe(
-        'API path template. Example: "/api/config/namespaces/{namespace}/http_loadbalancers/{name}"',
-      ),
-      path_params: z.record(z.string(), z.string()).optional().describe(
-        'Path parameter values. Example: { "namespace": "default", "name": "my-lb" }',
-      ),
-      query_params: z.record(z.string(), z.string()).optional().describe("Query string parameters"),
-      body: z.any().optional().describe(
-        "Request body (for POST/PUT/PATCH). Use xc_get_operation_details to see expected schema.",
-      ),
-      tenant: z.string().optional().describe(
-        "Tenant name to use. Required when multiple tenants are configured. " +
-          "Use xc_list_tenants to see available tenants.",
-      ),
-      response_filter: z.string().optional().describe(
-        "Comma-separated field paths to extract from the response body. Useful for large responses " +
-          "that would be truncated. Supports dot notation and [] for arrays. " +
-          'Examples: "items", "items[].name,items[].labels", "spec.origin_servers"',
-      ),
+      path: z.string().describe('API path. Example: "/api/config/namespaces/{namespace}/http_loadbalancers"'),
+      path_params: z.record(z.string(), z.string()).optional().describe('Path params. Example: {"namespace":"default"}'),
+      query_params: z.record(z.string(), z.string()).optional().describe("Query params"),
+      body: z.any().optional().describe("Request body for POST/PUT/PATCH"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants configured)"),
+      response_filter: z.string().optional().describe('Extract fields from response. Example: "items[].name,spec.origin_servers"'),
     },
     async (params) => {
       const tenant = withTenant(config, params.tenant);
@@ -184,19 +143,11 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_list_namespaces",
-    "List all namespaces in the F5 XC tenant. Typically the first step -- most resources are scoped to a namespace. " +
-      "Use prefix to filter by name prefix (e.g., exclude test namespaces).",
+    "List namespaces. Use prefix to filter.",
     {
-      tenant: z.string().optional().describe(
-        "Tenant name to use. Required when multiple tenants are configured. " +
-          "Use xc_list_tenants to see available tenants.",
-      ),
-      prefix: z.string().optional().describe(
-        'Filter namespaces by name prefix. Example: "prod" returns only namespaces starting with "prod".',
-      ),
-      label_selector: z.string().optional().describe(
-        'Filter namespaces by label selector. Example: "environment=production".',
-      ),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+      prefix: z.string().optional().describe("Filter by name prefix"),
+      label_selector: z.string().optional().describe("Filter by labels"),
     },
     async (params) => {
       const tenant = withTenant(config, params.tenant);
@@ -207,31 +158,15 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_list_resources",
-    "List resources of a specific type within a namespace. Common types: http_loadbalancers, " +
-      "tcp_loadbalancers, origin_pools, healthchecks, app_firewalls, service_policys, dns_zones, virtual_networks. " +
-      "Namespace is optional if a default namespace is configured via XC_DEFAULT_NAMESPACE. " +
-      "Use fields to extract specific per-item data, and max_items to limit results.",
+    "List resources in a namespace. Call directly for common types: http_loadbalancers, " +
+      "origin_pools, healthchecks, app_firewalls, certificates, dns_zones.",
     {
-      namespace: z.string().optional().describe(
-        'Namespace to list resources in. Optional if a default namespace is configured. Example: "default"',
-      ),
-      resource_type: z.string().describe(
-        'Resource type as it appears in the API path. Example: "http_loadbalancers"',
-      ),
-      label_selector: z.string().optional().describe(
-        'Optional label selector. Example: "app=web,environment=production"',
-      ),
-      tenant: z.string().optional().describe(
-        "Tenant name to use. Required when multiple tenants are configured. " +
-          "Use xc_list_tenants to see available tenants.",
-      ),
-      fields: z.array(z.string()).optional().describe(
-        "Fields to extract per item. Supports dot notation for nested fields. " +
-          'Examples: ["name", "labels", "spec.origin_servers", "system_metadata.creation_timestamp"]',
-      ),
-      max_items: z.number().optional().describe(
-        "Maximum number of items to return. Useful for large namespaces. Returns all items if omitted.",
-      ),
+      namespace: z.string().optional().describe("Namespace (optional if default configured)"),
+      resource_type: z.string().describe('Resource type. Example: "http_loadbalancers"'),
+      label_selector: z.string().optional().describe("Label filter"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+      fields: z.array(z.string()).optional().describe('Per-item fields. Example: ["spec.origin_servers"]'),
+      max_items: z.number().optional().describe("Max items to return"),
     },
     async (params) => {
       const tenant = withTenant(config, params.tenant);

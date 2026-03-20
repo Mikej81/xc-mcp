@@ -32,7 +32,7 @@ export async function handleListResources(
     queryParams.label_selector = params.label_selector;
   }
 
-  const response = await callApi(config, "GET", path, { queryParams });
+  const response = await callApi(config, "GET", path, { queryParams, skipTruncation: true });
 
   if (response.status !== 200) {
     return {

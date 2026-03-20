@@ -10,7 +10,7 @@ export async function handleListNamespaces(
     queryParams.label_selector = params.label_selector;
   }
 
-  const response = await callApi(config, "GET", "/api/web/namespaces", { queryParams });
+  const response = await callApi(config, "GET", "/api/web/namespaces", { queryParams, skipTruncation: true });
 
   if (response.status !== 200) {
     return {

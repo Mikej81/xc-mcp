@@ -164,7 +164,7 @@ describe("handleListNamespaces", () => {
       config,
       "GET",
       "/api/web/namespaces",
-      { queryParams: { label_selector: "env=prod" } },
+      { queryParams: { label_selector: "env=prod" }, skipTruncation: true },
     );
   });
 });

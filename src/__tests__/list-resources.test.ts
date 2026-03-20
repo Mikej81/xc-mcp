@@ -85,7 +85,7 @@ describe("handleListResources", () => {
       config,
       "GET",
       expect.any(String),
-      { queryParams: { label_selector: "env=prod" } },
+      { queryParams: { label_selector: "env=prod" }, skipTruncation: true },
     );
   });
 
