@@ -136,9 +136,11 @@ describe("handleOperationDetails", () => {
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.notes).toBeDefined();
-    expect(parsed.notes[0]).toContain("PEM-encoded");
-    expect(parsed.notes[0]).toContain("PKCS1");
-    expect(parsed.notes[0]).toContain("PKCS8");
+    expect(parsed.notes[0]).toContain("AUTOMATIC ENCRYPTION");
+    expect(parsed.notes[0]).toContain("blindfold-encrypt");
+    expect(parsed.notes[0]).toContain("clear_secret_info");
+    expect(parsed.notes[1]).toContain("PKCS1");
+    expect(parsed.notes[1]).toContain("PKCS8");
   });
 
   it("does not add PEM note for non-certificate operations", () => {

@@ -142,7 +142,10 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     "xc_call_api",
     "Execute an F5 XC API call. Use xc_discover_apis and xc_get_operation_details first " +
       "to understand the endpoint. Supports all HTTP methods with path params, query params, and body. " +
-      "When a default namespace is configured, it can be used for the {namespace} path parameter if not explicitly provided.",
+      "When a default namespace is configured, it can be used for the {namespace} path parameter if not explicitly provided. " +
+      "CERTIFICATES: Raw PEM private keys in the request body are automatically blindfold-encrypted " +
+      "(RSA+AES-GCM) before transmission -- just put the raw PEM in spec.private_key.clear_secret_info.url " +
+      "and the server handles encryption. Certificate PEM values at spec.certificate_url are auto-base64-encoded.",
     {
       method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).describe("HTTP method"),
       path: z.string().describe(

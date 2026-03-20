@@ -70,9 +70,14 @@ export function handleOperationDetails(
   if (entry.path.includes("/certificates") && entry.hasRequestBody) {
     output.notes = output.notes || [];
     output.notes.push(
-      "Private keys must be PEM-encoded. Both PKCS1 (BEGIN RSA PRIVATE KEY) and " +
-        "PKCS8 (BEGIN PRIVATE KEY) formats are accepted. When passing keys inline, " +
-        "base64-wrap with string:/// prefix.",
+      "AUTOMATIC ENCRYPTION: The MCP server automatically handles PEM encoding and blindfold encryption. " +
+        "Just put the raw PEM private key at spec.private_key.clear_secret_info.url and the raw PEM " +
+        "certificate at spec.certificate_url. The server will: (1) blindfold-encrypt the private key " +
+        "using the tenant's public key and move it to blindfold_secret_info.location, (2) base64-encode " +
+        "the certificate with string:/// prefix. No manual encryption or encoding needed.",
+    );
+    output.notes.push(
+      "Both PKCS1 (BEGIN RSA PRIVATE KEY) and PKCS8 (BEGIN PRIVATE KEY) formats are accepted.",
     );
   }
 
