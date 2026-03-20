@@ -83,7 +83,7 @@ function withTenant(
 }
 
 /**
- * Register all 6 tools on an McpServer instance.
+ * Register all tools on an McpServer instance.
  */
 function registerTools(server: McpServer, config: ServerConfig, index: OperationsIndex) {
   server.tool(

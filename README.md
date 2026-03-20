@@ -4,32 +4,37 @@ An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants acces
 
 ## How It Works
 
-Instead of registering thousands of individual tools, this server exposes **6 smart tools** that let an AI discover, explore, and call any F5 XC API endpoint:
+Instead of registering thousands of individual tools, this server exposes **7 smart tools** that let an AI discover, explore, and call any F5 XC API endpoint:
 
 | Tool | What It Does |
 |------|--------------|
-| `xc_discover_apis` | Search/browse API operations by keyword, category, HTTP method |
-| `xc_get_operation_details` | Get schema details with `summary_mode` and `max_depth` control |
+| `xc_discover_apis` | Search API operations by keyword, category, HTTP method |
+| `xc_get_operation_details` | Get schema or templates for an operation, with `summary_mode` and `max_depth` |
 | `xc_call_api` | Execute any API call with `response_filter` for large responses |
+| `xc_create_cert` | Generate a self-signed cert, blindfold-encrypt the key, and create the cert object |
 | `xc_list_namespaces` | List namespaces with `prefix` and `label_selector` filtering |
 | `xc_list_resources` | List resources with `fields` projection and `max_items` limit |
 | `xc_list_tenants` | List configured tenants, server version, and update status |
 
-**Typical workflow:** The AI calls `xc_discover_apis` to find relevant endpoints > `xc_get_operation_details` to understand the schema > `xc_call_api` to make the actual request.
+**Typical workflow:** For common resources (LBs, origin pools, WAFs, certs), the AI calls tools directly using built-in templates -- no discovery or schema lookup needed. For uncommon operations: `xc_discover_apis` > `xc_get_operation_details` > `xc_call_api`.
 
 ### Token optimization
 
 The server is designed to minimize LLM context consumption:
 
-- **Response filtering:** Use `response_filter` on `xc_call_api` to extract specific fields from large responses — e.g., `"items[].name,items[].labels"` extracts 200 bytes from a 50KB response. Never applied to error responses (4xx/5xx always return the full body).
-- **Summary mode:** Use `summary_mode: true` on `xc_get_operation_details` to strip descriptions, examples, and validation rules — ~60% smaller schemas with only types, required fields, enums, and oneof groups.
-- **Response schema omitted by default:** `xc_get_operation_details` omits the response schema (which typically duplicates the request schema). Set `include_response_schema: true` to include it.
-- **Schema depth control:** Use `max_depth` (up to 10, default 4) to control how deep nested schemas are resolved.
-- **Field projection:** Use `fields` on `xc_list_resources` to extract specific per-item data — e.g., `["spec.origin_servers", "system_metadata.creation_timestamp"]`.
-- **Namespace filtering:** Use `prefix` on `xc_list_namespaces` to filter by name prefix, reducing output on tenants with 100+ namespaces.
-- **Item limits:** Use `max_items` on `xc_list_resources` to cap the number of items returned.
-- **Compact output:** All JSON output uses compact serialization (no whitespace), saving ~20% tokens per response.
-- **Oneof constraints:** F5 XC `x-ves-oneof-field-*` extensions are preserved in schema output so the LLM knows which fields are mutually exclusive.
+- **Resource templates:** For common create operations (HTTP/TCP LBs, origin pools, WAFs, certs, healthchecks, DNS zones, service policies), `xc_get_operation_details` returns compact working examples (~50 lines) instead of full schemas (~630 lines) — **85% token reduction** on schema lookups. Use `include_full_schema: true` when you need the complete schema.
+- **Server-side cert generation:** `xc_create_cert` generates certs, blindfold-encrypts keys, and creates the object entirely server-side. No PEM content passes through the LLM conversation.
+- **Response filtering:** Use `response_filter` on `xc_call_api` to extract specific fields from large responses — e.g., `"items[].name,items[].labels"`. Never applied to error responses (4xx/5xx always return the full body).
+- **LB defaults:** `xc_call_api` automatically sets `non_default_loadbalancer` and `port: 443` on HTTPS LB create/update unless explicitly overridden.
+- **Summary mode:** Use `summary_mode: true` on `xc_get_operation_details` to strip descriptions, keeping only types, required fields, enums, and oneof groups.
+- **Response schema omitted by default:** Set `include_response_schema: true` to include it.
+- **Schema depth control:** Use `max_depth` (up to 10, default 4) to resolve deeper nested schemas.
+- **Field projection:** Use `fields` on `xc_list_resources` to extract specific per-item data.
+- **Namespace filtering:** Use `prefix` on `xc_list_namespaces` to filter by name prefix.
+- **Item limits:** Use `max_items` on `xc_list_resources` to cap results.
+- **Compact output:** All JSON uses compact serialization (no whitespace), saving ~20% tokens.
+- **Oneof constraints:** `x-ves-oneof-field-*` extensions preserved so the LLM knows which fields are mutually exclusive.
+- **Blindfold-only:** Private keys always use `blindfold_secret_info`, never `clear_secret_info`.
 
 ## Prerequisites
 
@@ -275,8 +280,9 @@ Once connected, just ask in plain language:
 - *"List all load balancers that have no origin pools configured"*
 
 **Configuration changes:**
+- *"Create an HTTPS load balancer called prod-web on domain app.example.com with a WAF and origin at 10.0.0.1:8080"*
+- *"Generate a self-signed certificate for api.example.com"*
 - *"Add a WAF policy to my existing load balancer"*
-- *"Create an HTTP load balancer called my-app that routes to 10.0.0.1:8080"*
 - *"Delete the load balancer named 'test-lb' from namespace staging"*
 
 **Multi-tenant:**
@@ -322,12 +328,14 @@ XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.i
 
 ## Architecture
 
-- **Build time:** `scripts/build-index.ts` parses all 268 OpenAPI spec files > generates `data/operations-index.json` (searchable index with O(1) lookup)
-- **Runtime:** Index loads into memory. Full schemas resolved on-demand from original spec files when `xc_get_operation_details` is called (depth-limited `$ref` resolution, configurable via `max_depth`)
+- **Build time:** 268 OpenAPI spec files parsed into searchable index with O(1) lookup
+- **Runtime:** Schemas resolved on-demand with configurable depth; resource templates returned for common types
+- **7 tools:** discover, operation details, call API, create cert, list namespaces, list resources, list tenants
 - **Auth:** All API calls include `Authorization: APIToken <token>` automatically
-- **Certificates:** PEM private keys are automatically blindfold-encrypted via the F5 XC secret management API (RSA+AES-GCM envelope encryption)
-- **Safety:** Responses truncated at 50KB to prevent overwhelming the AI context window; `response_filter` extracts specific fields before truncation
-- **Token optimization:** Compact JSON output, summary mode for schemas, field projection for lists, namespace prefix filtering
-- **Version check:** On startup and via `xc_list_tenants`, the server checks GitHub for newer releases
-- **Transports:** stdio (subprocess, used by Claude Code) and Streamable HTTP (remote, used by ChatGPT)
-- **Tests:** 154 unit tests across 14 test files
+- **Certificates:** `xc_create_cert` generates certs server-side; private keys are blindfold-encrypted (RSA+AES-GCM envelope encryption) automatically
+- **Safety:** API responses truncated at 50KB for `xc_call_api`; list tools read full responses for complete results
+- **Token optimization:** Resource templates (~85% smaller than schemas), compact JSON, summary mode, field projection, response filtering, namespace prefix filtering
+- **Version check:** On startup and via `xc_list_tenants`, checks GitHub for newer releases
+- **Docker:** Multi-stage build, non-root user, health check
+- **Transports:** stdio (Claude Code) and Streamable HTTP (ChatGPT) with 30-minute idle session cleanup
+- **Tests:** 157 unit tests across 15 test files

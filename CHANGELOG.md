@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0 -- 2026-03-20
+
+### First stable release
+
+7 MCP tools covering 1,764 F5 XC API endpoints with token-optimized output, resource templates, and server-side certificate management.
+
+**Tools:** `xc_discover_apis`, `xc_get_operation_details`, `xc_call_api`, `xc_create_cert`, `xc_list_namespaces`, `xc_list_resources`, `xc_list_tenants`
+
+**Highlights since 0.0.x:**
+- Resource templates for 8 common types — 85% fewer tokens than full schema dumps
+- `xc_create_cert` generates certs and blindfold-encrypts keys entirely server-side
+- LB defaults (port 443, non_default_loadbalancer) prevent common API errors
+- Compact JSON, trimmed tool descriptions, response filtering, field projection
+- Multi-tenant support with per-tenant default namespaces
+- Docker hardening (non-root, healthcheck, .dockerignore)
+- HTTP session idle timeout (30 min)
+- Auto-update check on startup
+- 157 tests across 15 files
+
 ## 0.0.9 -- 2026-03-20
 
 ### xc_create_cert tool, resource templates, LB defaults, token optimization
