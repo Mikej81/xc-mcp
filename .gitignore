@@ -119,3 +119,4 @@ example/
 demo/
 
 .DS*
+@eaDir/
