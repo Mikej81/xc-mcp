@@ -1,51 +1,41 @@
 # F5 Distributed Cloud (XC) MCP Server
 
-An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants access to the full F5 Distributed Cloud API -- 1,764 endpoints across 18 categories. Works with **Claude Code**, **ChatGPT**, and any MCP-compatible client.
+An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants access to the full F5 Distributed Cloud API. Covers 1,764 endpoints across 18 categories. Works with **Claude Code**, **ChatGPT**, and any MCP-compatible client.
 
 ## How It Works
 
-Instead of registering thousands of individual tools, this server exposes **7 smart tools** that let an AI discover, explore, and call any F5 XC API endpoint:
+Instead of registering thousands of individual tools, the server exposes 7 tools that let an AI discover, explore, and call any F5 XC API endpoint. For common resources like load balancers and origin pools, the AI can skip discovery entirely and use built-in templates.
 
-| Tool | What It Does |
-|------|--------------|
-| `xc_discover_apis` | Search API operations by keyword, category, HTTP method |
-| `xc_get_operation_details` | Get schema or templates for an operation, with `summary_mode` and `max_depth` |
-| `xc_call_api` | Execute any API call with `response_filter` for large responses |
-| `xc_create_cert` | Generate a self-signed cert, blindfold-encrypt the key, and create the cert object |
-| `xc_list_namespaces` | List namespaces with `prefix` and `label_selector` filtering |
-| `xc_list_resources` | List resources with `fields` projection and `max_items` limit |
-| `xc_list_tenants` | List configured tenants, server version, and update status |
+| Tool | Purpose |
+|------|---------|
+| `xc_discover_apis` | Search API operations by keyword, category, or HTTP method |
+| `xc_get_operation_details` | Get request body templates or full schemas for an operation |
+| `xc_call_api` | Execute any API call with optional response filtering |
+| `xc_create_cert` | Generate a self-signed cert with blindfold-encrypted private key |
+| `xc_list_namespaces` | List namespaces with optional prefix filtering |
+| `xc_list_resources` | List resources with field projection and item limits |
+| `xc_list_tenants` | Show configured tenants, version, and update availability |
 
-**Typical workflow:** For common resources (LBs, origin pools, WAFs, certs), the AI calls tools directly using built-in templates -- no discovery or schema lookup needed. For uncommon operations: `xc_discover_apis` > `xc_get_operation_details` > `xc_call_api`.
+The server also exposes [MCP resources](#mcp-resources) for browsing API categories and resource types, and [MCP prompts](#mcp-prompts) for common workflows like auditing a namespace or deploying a load balancer.
 
-### Token optimization
+### Keeping token usage low
 
-The server is designed to minimize LLM context consumption:
+The biggest challenge with API-heavy MCP tools is context bloat. Every response the AI sees costs tokens. This server tackles that at multiple levels:
 
-- **Resource templates:** For common create operations (HTTP/TCP LBs, origin pools, WAFs, certs, healthchecks, DNS zones, service policies), `xc_get_operation_details` returns compact working examples (~50 lines) instead of full schemas (~630 lines) — **85% token reduction** on schema lookups. Use `include_full_schema: true` when you need the complete schema.
-- **Server-side cert generation:** `xc_create_cert` generates certs, blindfold-encrypts keys, and creates the object entirely server-side. No PEM content passes through the LLM conversation.
-- **Response filtering:** Use `response_filter` on `xc_call_api` to extract specific fields from large responses — e.g., `"items[].name,items[].labels"`. Never applied to error responses (4xx/5xx always return the full body).
-- **LB defaults:** `xc_call_api` automatically sets `non_default_loadbalancer` and `port: 443` on HTTPS LB create/update unless explicitly overridden.
-- **Summary mode:** Use `summary_mode: true` on `xc_get_operation_details` to strip descriptions, keeping only types, required fields, enums, and oneof groups.
-- **Response schema omitted by default:** Set `include_response_schema: true` to include it.
-- **Schema depth control:** Use `max_depth` (up to 10, default 4) to resolve deeper nested schemas.
-- **Field projection:** Use `fields` on `xc_list_resources` to extract specific per-item data.
-- **Namespace filtering:** Use `prefix` on `xc_list_namespaces` to filter by name prefix.
-- **Item limits:** Use `max_items` on `xc_list_resources` to cap results.
-- **Compact output:** All JSON uses compact serialization (no whitespace), saving ~20% tokens.
-- **Oneof constraints:** `x-ves-oneof-field-*` extensions preserved so the LLM knows which fields are mutually exclusive.
-- **Blindfold-only:** Private keys always use `blindfold_secret_info`, never `clear_secret_info`.
+- **Templates instead of schemas.** When you ask for the create schema of an HTTP LB, origin pool, WAF, or cert, the server returns a compact working example (~50 lines) instead of the full OpenAPI schema (~630 lines). That's 85% fewer tokens. Pass `include_full_schema: true` if you need the real thing.
+- **Server-side cert generation.** `xc_create_cert` generates the cert, blindfold-encrypts the private key, and creates the XC object without any PEM content ever entering the conversation.
+- **Response filtering.** `response_filter` on `xc_call_api` extracts specific fields from large API responses before they reach the AI. Useful for quota endpoints that return 50KB+.
+- **Smart defaults.** The server automatically sets `port: 443` and `non_default_loadbalancer` on HTTPS LB creates so the AI doesn't need to look up those requirements.
+- **Compact output.** All JSON is serialized without whitespace. Tool descriptions are intentionally terse. Discovery output is one line per operation.
 
 ## Prerequisites
 
 - An **F5 Distributed Cloud** account
-- An **API Token** -- create one in XC Console > Administration > Personal Management > Credentials > "Add Credentials" > select "API Token"
-- Your **Tenant URL** -- looks like `https://your-tenant.console.ves.volterra.io` (visible in your browser when logged into XC Console)
+- An **API Token** (create in XC Console > Administration > Personal Management > Credentials > "Add Credentials" > select "API Token")
+- Your **Tenant URL**, e.g. `https://your-tenant.console.ves.volterra.io` (visible in your browser when logged into XC Console)
 - **Docker** (recommended) or **Node.js 20+**
 
 ## Transport Modes
-
-The server supports two transport modes:
 
 | Mode | Set via | Used by | How it works |
 |------|---------|---------|--------------|
@@ -56,12 +46,12 @@ The server supports two transport modes:
 
 ## Setup: Claude Code
 
-Claude Code uses **stdio** mode. It launches the server as a subprocess -- no ports, no background processes.
+Claude Code uses stdio mode. It launches the server as a subprocess. No ports, no background processes.
 
 ### Option A: Docker (recommended)
 
 ```bash
-# 1. Authenticate with GHCR (one-time setup -- use a GitHub PAT with read:packages scope)
+# 1. Authenticate with GHCR (one-time, use a GitHub PAT with read:packages scope)
 echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 
 # 2. Pull the image
@@ -70,38 +60,32 @@ docker pull ghcr.io/mikej81/xc-mcp:latest
 # 3. Register with Claude Code
 claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","ghcr.io/mikej81/xc-mcp:latest"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
 
-# 4. Verify -- start Claude Code and type /mcp
+# 4. Verify: start Claude Code and type /mcp
 ```
 
-Replace `YOUR_API_TOKEN_HERE` with your actual API token, and update the tenant URL.
-
-**What `--scope user` means:** The server will be available in all your Claude Code sessions, not just the current project.
+Replace `YOUR_API_TOKEN_HERE` and the tenant URL with your actual values. `--scope user` makes the server available across all your Claude Code sessions.
 
 ### Option A (alternative): Build Docker image locally
 
 ```bash
-# 1. Clone and build
 git clone https://github.com/Mikej81/xc-mcp.git
 cd xc-mcp
 docker build -t f5-xc-mcp .
 
-# 2. Register with Claude Code
 claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_API_TOKEN","-e","XC_TENANT_URL","f5-xc-mcp"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
 ```
 
 ### Option B: Node.js
 
 ```bash
-# 1. Build
 npm install && npm run build
 
-# 2. Register with Claude Code
-claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"node","args":["/absolute/path/to/xc-mcp-container/dist/src/index.js"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
+claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"node","args":["/absolute/path/to/xc-mcp/dist/src/index.js"],"env":{"XC_API_TOKEN":"YOUR_API_TOKEN_HERE","XC_TENANT_URL":"https://your-tenant.console.ves.volterra.io"}}'
 ```
 
-### Option C: Project-scoped config file
+### Option C: Project-scoped config
 
-Create `.mcp.json` in your project root to share the setup with a team:
+Drop a `.mcp.json` in your project root so the whole team gets the same setup:
 
 ```json
 {
@@ -131,9 +115,9 @@ claude mcp remove f5-xc  # Remove this server
 
 ## Setup: ChatGPT
 
-ChatGPT connects to MCP servers over **HTTP**. You need to run the server where ChatGPT can reach it (a public URL or a tunnel).
+ChatGPT connects over HTTP. You need to run the server somewhere ChatGPT can reach it.
 
-### Step 1: Start the server in HTTP mode
+### Start the server
 
 **Docker:**
 ```bash
@@ -150,33 +134,24 @@ docker run --rm -p 3000:3000 \
 MCP_TRANSPORT=http XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.io node dist/src/index.js
 ```
 
-The server starts on `http://localhost:3000/mcp`.
-
-### Step 2: Expose the server publicly
+### Expose publicly
 
 ChatGPT needs a public HTTPS URL. For development, use a tunnel:
 
 ```bash
-# Using ngrok
 ngrok http 3000
-
-# Using Cloudflare Tunnel
+# or
 cloudflared tunnel --url http://localhost:3000
 ```
 
-This gives you a URL like `https://abc123.ngrok.app`.
+### Connect in ChatGPT
 
-### Step 3: Connect in ChatGPT
-
-1. Open ChatGPT > **Settings** > **Connectors** > **Advanced settings** > enable **Developer Mode**
-2. Go to **Settings** > **Connectors** > click **Create**
-3. Enter:
-   - **Name:** F5 XC
-   - **Description:** F5 Distributed Cloud API
-   - **Connector URL:** `https://abc123.ngrok.app/mcp` (your tunnel URL + `/mcp`)
+1. **Settings** > **Connectors** > **Advanced settings** > enable **Developer Mode**
+2. **Settings** > **Connectors** > **Create**
+3. Enter your tunnel URL + `/mcp` as the Connector URL
 4. Save and start chatting
 
-### Docker Compose (recommended for persistent setup)
+### Docker Compose
 
 ```yaml
 services:
@@ -193,10 +168,8 @@ services:
 ```
 
 ```bash
-# Create .env file (git-ignored) with your credentials
 echo 'XC_API_TOKEN=your-token' >> .env
 echo 'XC_TENANT_URL=https://your-tenant.console.ves.volterra.io' >> .env
-
 docker compose up -d
 ```
 
@@ -213,33 +186,26 @@ XC_TENANT_DEV_URL=https://dev.console.ves.volterra.io
 XC_TENANT_DEV_TOKEN=your-dev-api-token
 ```
 
-The naming convention is `XC_TENANT_<NAME>_URL` and `XC_TENANT_<NAME>_TOKEN`. Both are required for each tenant.
+The naming convention is `XC_TENANT_<NAME>_URL` and `XC_TENANT_<NAME>_TOKEN`. When only one tenant is configured, the `tenant` parameter is optional. With multiple tenants, you'll need to specify which one on each call.
 
-When one tenant is configured, the `tenant` parameter is optional (auto-selected). When multiple tenants are configured, the `tenant` parameter is required -- use `xc_list_tenants` to see available names.
-
-**Claude Code with multiple tenants:**
 ```bash
 claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_TENANT_PROD_URL","-e","XC_TENANT_PROD_TOKEN","-e","XC_TENANT_DEV_URL","-e","XC_TENANT_DEV_TOKEN","ghcr.io/mikej81/xc-mcp:latest"],"env":{"XC_TENANT_PROD_URL":"https://prod.console.ves.volterra.io","XC_TENANT_PROD_TOKEN":"abc123","XC_TENANT_DEV_URL":"https://dev.console.ves.volterra.io","XC_TENANT_DEV_TOKEN":"def456"}}'
 ```
 
----
-
 ## Default Namespace
 
-Most F5 XC API operations are scoped to a namespace. You can configure a default namespace so you don't have to specify it on every call.
+Most XC resources live in a namespace. Set a default so you don't have to specify it every time:
 
-**Single tenant:**
 ```bash
+# Single tenant
 XC_DEFAULT_NAMESPACE=my-namespace
-```
 
-**Multi-tenant:** use `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` per tenant:
-```bash
+# Multi-tenant (per tenant)
 XC_TENANT_PROD_DEFAULT_NAMESPACE=production
 XC_TENANT_DEV_DEFAULT_NAMESPACE=dev-sandbox
 ```
 
-When a default namespace is configured, the `namespace` parameter becomes optional on `xc_list_resources`. An explicit namespace always takes priority over the default. If no namespace is provided and no default is configured, the server returns a guidance message asking the user to specify one.
+An explicit namespace always takes priority. If neither is set, the server asks the user to pick one.
 
 ---
 
@@ -254,9 +220,32 @@ When a default namespace is configured, the `namespace` parameter becomes option
 | `XC_DEFAULT_NAMESPACE` | No | -- | Default namespace (single-tenant mode) |
 | `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` | No | -- | Default namespace (multi-tenant mode) |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
-| `MCP_HTTP_PORT` | No | `3000` | HTTP port (only used when `MCP_TRANSPORT=http`) |
+| `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
 
-*Either single-tenant (`XC_API_TOKEN` + `XC_TENANT_URL`) or multi-tenant (`XC_TENANT_<NAME>_URL` + `XC_TENANT_<NAME>_TOKEN`) variables are required.
+*Either single-tenant or multi-tenant variables are required.
+
+---
+
+## MCP Resources
+
+The server exposes read-only resources that MCP clients can browse:
+
+| Resource URI | Description |
+|-------------|-------------|
+| `xc://api/categories` | All 18 API categories with operation counts |
+| `xc://api/resource-types` | The 8 resource types that have built-in create templates |
+| `xc://tenants/{name}` | Configuration details for a specific tenant |
+
+## MCP Prompts
+
+Pre-built prompt templates for common workflows:
+
+| Prompt | Description |
+|--------|-------------|
+| `audit-namespace` | Audit all resources in a namespace, find orphaned objects |
+| `deploy-https-lb` | Deploy an LB with cert, origin pool, and WAF from a few params |
+| `compare-tenants` | Compare resources between two tenants |
+| `inventory` | Full resource count table for a namespace |
 
 ---
 
@@ -264,29 +253,20 @@ When a default namespace is configured, the `namespace` parameter becomes option
 
 Once connected, just ask in plain language:
 
-**Basic inventory:**
+**Inventory and inspection:**
 - *"List all namespaces in my XC tenant"*
 - *"Show me all HTTP load balancers in the default namespace"*
-- *"What origin pools exist in namespace default?"*
+- *"Get the full config of my load balancer named prod-web"*
 
-**Configuration inspection:**
-- *"Get the full configuration of my load balancer named 'prod-web'"*
-- *"What API endpoints are available for managing DNS zones?"*
-- *"Show me the WAF policy attached to my keepalive LB"*
-
-**Cross-referencing and auditing:**
-- *"Show me orphaned objects in my tenant"* -- the AI cross-references LBs, origin pools, WAFs, and healthchecks to find unreferenced resources
+**Auditing:**
 - *"Which origin pools aren't used by any load balancer?"*
-- *"List all load balancers that have no origin pools configured"*
+- *"Show me orphaned objects in my tenant"*
 
-**Configuration changes:**
-- *"Create an HTTPS load balancer called prod-web on domain app.example.com with a WAF and origin at 10.0.0.1:8080"*
+**Creating resources:**
+- *"Create an HTTPS load balancer for app.example.com with a WAF and origin at 10.0.0.1:8080"*
 - *"Generate a self-signed certificate for api.example.com"*
-- *"Add a WAF policy to my existing load balancer"*
-- *"Delete the load balancer named 'test-lb' from namespace staging"*
 
 **Multi-tenant:**
-- *"Show namespaces in the prod tenant"*
 - *"Compare load balancers between prod and dev"*
 
 ## API Categories
@@ -318,24 +298,17 @@ npm install              # Install dependencies
 npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
-npm run build            # All of the above (download + index + compile)
-npm test                 # Run unit tests
+npm run build            # All of the above
+npm test                 # Run 157 unit tests
 npm run test:watch       # Run tests in watch mode
-
-# Run in dev mode (no compile step needed)
-XC_API_TOKEN=your-token XC_TENANT_URL=https://your-tenant.console.ves.volterra.io npm run dev
 ```
 
 ## Architecture
 
-- **Build time:** 268 OpenAPI spec files parsed into searchable index with O(1) lookup
-- **Runtime:** Schemas resolved on-demand with configurable depth; resource templates returned for common types
-- **7 tools:** discover, operation details, call API, create cert, list namespaces, list resources, list tenants
-- **Auth:** All API calls include `Authorization: APIToken <token>` automatically
-- **Certificates:** `xc_create_cert` generates certs server-side; private keys are blindfold-encrypted (RSA+AES-GCM envelope encryption) automatically
-- **Safety:** API responses truncated at 50KB for `xc_call_api`; list tools read full responses for complete results
-- **Token optimization:** Resource templates (~85% smaller than schemas), compact JSON, summary mode, field projection, response filtering, namespace prefix filtering
-- **Version check:** On startup and via `xc_list_tenants`, checks GitHub for newer releases
-- **Docker:** Multi-stage build, non-root user, health check
-- **Transports:** stdio (Claude Code) and Streamable HTTP (ChatGPT) with 30-minute idle session cleanup
-- **Tests:** 157 unit tests across 15 test files
+At build time, 268 OpenAPI spec files are parsed into a searchable index with O(1) operation lookup. At runtime, schemas are resolved on demand from the original spec files with configurable depth and optional summarization. Common resource types return pre-built templates instead of full schemas.
+
+All API calls go through a shared HTTP client that handles auth headers, request timeouts (30s), and response truncation (50KB for `xc_call_api`, unlimited for list tools that do their own extraction). Private keys are always blindfold-encrypted using the tenant's RSA public key before transmission.
+
+The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user with a health check.
+
+On startup, the server checks GitHub for newer releases and logs a notice if an update is available. The version is also shown in `xc_list_tenants` output.
