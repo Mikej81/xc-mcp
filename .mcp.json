@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "f5-xc": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "XC_API_TOKEN", "-e", "XC_TENANT_URL", "ghcr.io/mikej81/xc-mcp:latest"],
+      "env": {
+        "XC_API_TOKEN": "YOUR_API_TOKEN_HERE",
+        "XC_TENANT_URL": "https://your-tenant.console.ves.volterra.io"
+      }
+    }
+  }
+}

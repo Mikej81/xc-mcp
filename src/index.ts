@@ -230,12 +230,195 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   );
 }
 
+/**
+ * Register MCP resource templates for discoverable data.
+ */
+function registerResources(server: McpServer, config: ServerConfig, index: OperationsIndex) {
+  // Static resource: API categories and operation counts
+  server.resource(
+    "api-categories",
+    "xc://api/categories",
+    { description: "F5 XC API categories with operation counts" },
+    async () => {
+      const counts = new Map<string, number>();
+      for (const op of index.operations) {
+        counts.set(op.category, (counts.get(op.category) || 0) + 1);
+      }
+      const categories = Array.from(counts.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, count]) => `${name}: ${count} operations`);
+      return {
+        contents: [{
+          uri: "xc://api/categories",
+          text: `${index.totalOperations} operations across ${categories.length} categories:\n\n${categories.join("\n")}`,
+          mimeType: "text/plain",
+        }],
+      };
+    },
+  );
+
+  // Static resource: common resource types with templates
+  server.resource(
+    "resource-types",
+    "xc://api/resource-types",
+    { description: "Common F5 XC resource types that have create templates" },
+    async () => ({
+      contents: [{
+        uri: "xc://api/resource-types",
+        text: [
+          "Resource types with built-in create templates:",
+          "",
+          "  http_loadbalancers  — HTTPS LB with auto-cert or custom cert",
+          "  tcp_loadbalancers   — TCP LB with origin pool",
+          "  origin_pools        — Public IP or Kubernetes service upstream",
+          "  app_firewalls       — WAF in blocking mode",
+          "  certificates        — TLS cert with blindfold-encrypted key",
+          "  healthchecks        — HTTP health check",
+          "  dns_zones           — Primary DNS zone",
+          "  service_policys     — Allow/deny service policy",
+          "",
+          "Use xc_get_operation_details with the POST operation to get the template.",
+          "Use xc_list_resources to list existing resources of any type.",
+        ].join("\n"),
+        mimeType: "text/plain",
+      }],
+    }),
+  );
+
+  // Resource template: tenant info (parameterized by tenant name)
+  server.resource(
+    "tenant-info",
+    "xc://tenants/{name}",
+    { description: "F5 XC tenant configuration details" },
+    async (uri) => {
+      const name = uri.pathname.split("/").pop() || "";
+      const tenant = config.tenants.find((t) => t.name === name);
+      if (!tenant) {
+        return {
+          contents: [{
+            uri: uri.href,
+            text: `Tenant "${name}" not found. Available: ${config.tenants.map((t) => t.name).join(", ")}`,
+            mimeType: "text/plain",
+          }],
+        };
+      }
+      const lines = [
+        `Tenant: ${tenant.name}`,
+        `URL: ${tenant.tenantUrl}`,
+      ];
+      if (tenant.defaultNamespace) {
+        lines.push(`Default namespace: ${tenant.defaultNamespace}`);
+      }
+      return {
+        contents: [{
+          uri: uri.href,
+          text: lines.join("\n"),
+          mimeType: "text/plain",
+        }],
+      };
+    },
+  );
+}
+
+/**
+ * Register MCP prompts — pre-built templates for common workflows.
+ */
+function registerPrompts(server: McpServer, config: ServerConfig) {
+  server.prompt(
+    "audit-namespace",
+    "Audit all resources in a namespace — lists LBs, origin pools, WAFs, certs, and identifies orphaned objects",
+    { namespace: z.string().describe("Namespace to audit"), tenant: z.string().optional().describe("Tenant name") },
+    (params) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Audit the "${params.namespace}" namespace${params.tenant ? ` on the ${params.tenant} tenant` : ""}. ` +
+            "List all HTTP load balancers, origin pools, app firewalls, certificates, and healthchecks. " +
+            "Then cross-reference them to find: (1) origin pools not referenced by any LB, " +
+            "(2) WAF policies not attached to any LB, (3) certificates not used by any LB, " +
+            "(4) LBs with no origin pools configured. Summarize findings in a table.",
+        },
+      }],
+    }),
+  );
+
+  server.prompt(
+    "deploy-https-lb",
+    "Deploy an HTTPS load balancer with WAF, origin pool, and certificate",
+    {
+      domain: z.string().describe("Domain name for the LB"),
+      origin: z.string().describe("Upstream origin (host:port)"),
+      namespace: z.string().describe("Namespace"),
+      tenant: z.string().optional().describe("Tenant name"),
+    },
+    (params) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Deploy an HTTPS load balancer for ${params.domain} in namespace ${params.namespace}` +
+            `${params.tenant ? ` on the ${params.tenant} tenant` : ""}. ` +
+            `Create a self-signed certificate, an origin pool pointing to ${params.origin}, ` +
+            "and an app firewall in blocking mode. Advertise on the default public VIP. " +
+            "Name all resources based on the domain.",
+        },
+      }],
+    }),
+  );
+
+  server.prompt(
+    "compare-tenants",
+    "Compare resources between two tenants",
+    {
+      namespace: z.string().describe("Namespace to compare"),
+      resource_type: z.string().optional().describe("Resource type (default: http_loadbalancers)"),
+    },
+    (params) => {
+      const tenantNames = config.tenants.map((t) => t.name).join(" and ");
+      const rt = params.resource_type || "http_loadbalancers";
+      return {
+        messages: [{
+          role: "user",
+          content: {
+            type: "text",
+            text: `Compare ${rt} in the "${params.namespace}" namespace between the ${tenantNames} tenants. ` +
+              "List what exists in each, highlight differences in configuration, " +
+              "and flag any resources that exist in one tenant but not the other.",
+          },
+        }],
+      };
+    },
+  );
+
+  server.prompt(
+    "inventory",
+    "Full inventory of a namespace — all resource types and counts",
+    { namespace: z.string().describe("Namespace to inventory"), tenant: z.string().optional().describe("Tenant name") },
+    (params) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Give me a full inventory of the "${params.namespace}" namespace` +
+            `${params.tenant ? ` on the ${params.tenant} tenant` : ""}. ` +
+            "List counts for: http_loadbalancers, tcp_loadbalancers, origin_pools, " +
+            "app_firewalls, certificates, healthchecks, dns_zones, service_policys. " +
+            "Present as a table with resource type and count.",
+        },
+      }],
+    }),
+  );
+}
+
 function createMcpServer(config: ServerConfig, index: OperationsIndex): McpServer {
   const server = new McpServer({
     name: "f5-xc-mcp",
     version: VERSION,
   });
   registerTools(server, config, index);
+  registerResources(server, config, index);
+  registerPrompts(server, config);
   return server;
 }
 
