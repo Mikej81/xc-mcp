@@ -19,6 +19,10 @@ import { handleCallApi } from "./tools/call-api.js";
 import { handleListNamespaces } from "./tools/list-namespaces.js";
 import { handleListResources } from "./tools/list-resources.js";
 import { handleCreateCert } from "./tools/create-cert.js";
+import { handlePatchResource } from "./tools/patch-resource.js";
+import { handleWaitReady } from "./tools/wait-ready.js";
+import { handleDiffResource } from "./tools/diff-resource.js";
+import { handleQueryAccessLogs } from "./tools/query-access-logs.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -196,6 +200,89 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       const tenant = withTenant(config, params.tenant);
       if ("content" in tenant) return tenant;
       return handleCreateCert(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_patch_resource",
+    "Mutate an XC resource via JSON-Patch. Performs GET → strip read-only fields → apply ops → PUT. " +
+      "Avoids the GET-mutate-PUT round-trip the caller would otherwise hand-roll. " +
+      "Preserves resource_version unless check_resource_version=false.",
+    {
+      resource: z.string().describe('Resource ref. Format: "<resource_type>/<namespace>/<name>" or full /api path. Example: "http_loadbalancers/default/my-lb"'),
+      ops: z.array(z.object({
+        op: z.enum(["add", "replace", "remove"]),
+        path: z.string().describe("RFC 6901 JSON Pointer. Example: /spec/connection_idle_timeout"),
+        value: z.any().optional(),
+      })).describe("JSON-Patch ops"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+      check_resource_version: z.boolean().optional().describe("Pass current resource_version through the PUT for concurrency check (default true)"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handlePatchResource(tenant, {
+        resource: params.resource,
+        ops: params.ops as any,
+        check_resource_version: params.check_resource_version,
+      });
+    },
+  );
+
+  server.tool(
+    "xc_diff_resource",
+    "Show what xc_call_api PUT or xc_patch_resource would change. Returns a JSON-Patch diff " +
+      "between the current resource and a proposed body, without applying anything.",
+    {
+      resource: z.string().describe('Resource ref. Format: "<resource_type>/<namespace>/<name>"'),
+      body: z.any().describe("Proposed full resource body"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleDiffResource(tenant, { resource: params.resource, body: params.body });
+    },
+  );
+
+  server.tool(
+    "xc_lb_wait_ready",
+    "Poll an HTTP LB until spec.cert_state == CertificateValid (or timeout). " +
+      "Returns ready=false on timeout rather than throwing.",
+    {
+      namespace: z.string().describe("Namespace"),
+      lb_name: z.string().describe("HTTP LB name"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+      timeout_seconds: z.number().optional().describe("Max wait (default 600)"),
+      poll_interval_seconds: z.number().optional().describe("Poll cadence (default 30)"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleWaitReady(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_query_access_logs",
+    "Query XC access logs for an LB / time window. Parses stringified log entries, " +
+      "auto-paginates via scroll_id, and supports group_by aggregation.",
+    {
+      namespace: z.string().describe("Namespace"),
+      lb_name: z.string().optional().describe("LB name (sets vh_name label)"),
+      start: z.string().describe("RFC3339 start time"),
+      end: z.string().describe("RFC3339 end time"),
+      rsp_code_class: z.string().optional().describe("1xx/2xx/3xx/4xx/5xx"),
+      query: z.string().optional().describe("Raw Loki-style override"),
+      group_by: z.string().optional().describe("Dot-path field to count by. Example: rsp_code_details"),
+      max_pages: z.number().optional().describe("Pagination cap (default 5)"),
+      page_size: z.number().optional().describe("Per-page limit (default 100, max 500)"),
+      tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleQueryAccessLogs(tenant, params);
     },
   );
 
