@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants acces
 
 ## How It Works
 
-Instead of registering thousands of individual tools, the server exposes 7 tools that let an AI discover, explore, and call any F5 XC API endpoint. For common resources like load balancers and origin pools, the AI can skip discovery entirely and use built-in templates.
+Instead of registering thousands of individual tools, the server exposes 11 tools that let an AI discover, explore, and call any F5 XC API endpoint. For common resources like load balancers and origin pools, the AI can skip discovery entirely and use built-in templates. For multi-step state mutations, dedicated patch and diff tools handle the GET, strip, and PUT round-trip so callers do not have to.
 
 | Tool | Purpose |
 |------|---------|
@@ -12,6 +12,10 @@ Instead of registering thousands of individual tools, the server exposes 7 tools
 | `xc_get_operation_details` | Get request body templates or full schemas for an operation |
 | `xc_call_api` | Execute any API call with optional response filtering |
 | `xc_create_cert` | Generate a self-signed cert with blindfold-encrypted private key |
+| `xc_patch_resource` | Apply JSON-Patch ops to a resource, handling the GET, strip, and PUT round-trip |
+| `xc_diff_resource` | Show what a PUT would change as a JSON-Patch diff, without applying anything |
+| `xc_lb_wait_ready` | Poll an HTTP LB until its certificate state becomes valid or a timeout elapses |
+| `xc_query_access_logs` | Query access logs with parsing, auto-pagination, and optional group-by aggregation |
 | `xc_list_namespaces` | List namespaces with optional prefix filtering |
 | `xc_list_resources` | List resources with field projection and item limits |
 | `xc_list_tenants` | Show configured tenants, version, and update availability |
@@ -299,8 +303,25 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 157 unit tests
+npm test                 # Run 211 unit tests
 npm run test:watch       # Run tests in watch mode
+```
+
+### Live tenant smoke test
+
+`scripts/smoke-test.ts` exercises the four 0.2.0 tools (`xc_query_access_logs`, `xc_lb_wait_ready`, `xc_diff_resource`, `xc_patch_resource`) against a real XC tenant. Reads the same env vars as the server.
+
+```bash
+# Read-only checks against an existing HTTP LB
+XC_API_TOKEN=... XC_TENANT_URL=... \
+  npx tsx scripts/smoke-test.ts <namespace> <lb_name>
+
+# Include the patch path (adds a temporary label, verifies it, removes it)
+XC_API_TOKEN=... XC_TENANT_URL=... \
+  npx tsx scripts/smoke-test.ts <namespace> <lb_name> --allow-mutations
+
+# Multi-tenant
+npx tsx scripts/smoke-test.ts <namespace> <lb_name> --tenant prod
 ```
 
 ## Architecture

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0 -- 2026-04-30
+
+### Patch, diff, wait, and access log tools
+
+Adds four tools driven by real pain points hit while running an XC and BIG-IP coexistence test harness. Focus is on multi-step state mutations and access log observability that were previously verbose to build out of the generic `xc_call_api` tool.
+
+- **New `xc_patch_resource` tool** -- applies JSON-Patch ops over a GET, strip, PUT cycle so callers stop hand-rolling that round-trip. Optimistic concurrency via `resource_version` is on by default. Set `check_resource_version: false` to skip the version check.
+- **New `xc_diff_resource` tool** -- returns a JSON-Patch diff between the current resource and a proposed body without applying anything. Useful as a pre-flight before risky PUTs.
+- **New `xc_lb_wait_ready` tool** -- polls an HTTP LB's `spec.cert_state` until it reaches `CertificateValid` or the timeout elapses. Returns `ready: false` on timeout rather than throwing, so callers can branch cleanly.
+- **New `xc_query_access_logs` tool** -- queries the XC access log API, parses each stringified log entry into a real object, follows `scroll_id` for auto-pagination, and supports a `group_by` option for client-side count aggregation.
+- **JSON-Patch implementation** in `src/lib/json-patch.ts` -- in-house, no new dependencies. Supports `add`, `replace`, `remove`. The diff helper treats array changes as a single `replace` rather than computing element-level patches; pragmatic for XC config arrays which are usually authored as wholes.
+- **Read-only field stripping** -- `system_metadata`, `status`, `metadata.uid`, `metadata.creation_timestamp`, `metadata.modification_timestamp`, `metadata.tenant`, `metadata.creator_class`, `metadata.creator_id`, and `spec.view_internal` are removed before any PUT produced by `xc_patch_resource`. New rejected fields can be added in `src/lib/resource-mutate.ts`.
+- **Live tenant smoke test** -- `scripts/smoke-test.ts` exercises the four new tools against a real tenant and surfaced the missing `status` strip on first run.
+- **Tool count** -- 11 (up from 7)
+- **Unit tests** -- 211 tests across 21 test files (up from 157/15)
+
 ## 0.1.0 -- 2026-03-20
 
 ### First stable release
