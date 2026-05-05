@@ -24,6 +24,8 @@ import { handleWaitReady } from "./tools/wait-ready.js";
 import { handleDiffResource } from "./tools/diff-resource.js";
 import { handleQueryAccessLogs } from "./tools/query-access-logs.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
+import { parseAuthConfig, checkAuth, type AuthConfig } from "./lib/auth.js";
+import { log } from "./lib/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -498,6 +500,28 @@ function registerPrompts(server: McpServer, config: ServerConfig) {
   );
 }
 
+function truncateForLog(value: unknown, maxChars = 4096): unknown {
+  try {
+    const s = JSON.stringify(value);
+    if (s.length <= maxChars) return value;
+    return { _truncated: true, preview: s.slice(0, maxChars) };
+  } catch {
+    return { _truncated: true, error: "stringify_failed" };
+  }
+}
+
+function extractMcpFields(body: unknown): { mcpMethod?: string; toolName?: string } {
+  if (!body || typeof body !== "object") return {};
+  const obj = body as Record<string, unknown>;
+  const mcpMethod = typeof obj.method === "string" ? obj.method : undefined;
+  let toolName: string | undefined;
+  if (mcpMethod === "tools/call" && obj.params && typeof obj.params === "object") {
+    const params = obj.params as Record<string, unknown>;
+    if (typeof params.name === "string") toolName = params.name;
+  }
+  return { mcpMethod, toolName };
+}
+
 function createMcpServer(config: ServerConfig, index: OperationsIndex): McpServer {
   const server = new McpServer({
     name: "f5-xc-mcp",
@@ -523,7 +547,7 @@ async function startStdio(config: ServerConfig, index: OperationsIndex) {
  * Start in HTTP mode. Used by ChatGPT and other remote MCP clients.
  * Each session gets its own McpServer + transport instance.
  */
-async function startHttp(config: ServerConfig, index: OperationsIndex) {
+async function startHttp(config: ServerConfig, index: OperationsIndex, authConfig: AuthConfig) {
   const port = parseInt(process.env.MCP_HTTP_PORT || "3000", 10);
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const sessionLastActive = new Map<string, number>();
@@ -540,7 +564,10 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
           transports.delete(sid);
         }
         sessionLastActive.delete(sid);
-        console.error(`Session ${sid} cleaned up (idle ${Math.round((now - lastActive) / 60000)}m)`);
+        log("info", "session_expired", {
+          session_id: sid.slice(0, 8),
+          idle_minutes: Math.round((now - lastActive) / 60000),
+        });
       }
     }
   }, 60_000); // Check every minute
@@ -555,6 +582,51 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
       return;
     }
 
+    const startTime = Date.now();
+    let parsedBody: unknown = undefined;
+    let logged = false;
+    const emitAccessLog = () => {
+      if (logged) return;
+      logged = true;
+      const duration = Date.now() - startTime;
+      const status = res.statusCode;
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const xff = req.headers["x-forwarded-for"];
+      const xffFirst = Array.isArray(xff) ? xff[0] : (typeof xff === "string" ? xff.split(",")[0]?.trim() : undefined);
+      const { mcpMethod, toolName } = extractMcpFields(parsedBody);
+      const level = status >= 500 ? "error" : status >= 400 ? "warn" : "info";
+      log(level, "request", {
+        method: req.method,
+        path: url.pathname,
+        status,
+        session_id: sessionId ? sessionId.slice(0, 8) : undefined,
+        peer_ip: req.socket.remoteAddress,
+        peer_ip_xff: xffFirst,
+        duration_ms: duration,
+        mcp_method: mcpMethod,
+        tool_name: toolName,
+        ...(process.env.MCP_LOG_LEVEL?.toLowerCase() === "debug" && parsedBody !== undefined
+          ? { request_body: truncateForLog(parsedBody) }
+          : {}),
+      });
+    };
+    res.on("finish", emitAccessLog);
+    res.on("close", emitAccessLog);
+
+    // Auth gate — must run before body parsing or session lookup.
+    const authResult = checkAuth(authConfig, req.headers);
+    if (!authResult.ok) {
+      const peerIp = req.socket.remoteAddress;
+      log("warn", "auth_failed", {
+        reason: authResult.reason,
+        peer_ip: peerIp,
+        auth_header_name: authConfig.enabled ? authConfig.headerName : undefined,
+      });
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
     // Parse body for POST requests
     let body: unknown = undefined;
     if (req.method === "POST") {
@@ -564,6 +636,7 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
       }
       try {
         body = JSON.parse(Buffer.concat(chunks).toString());
+        parsedBody = body;
       } catch {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -589,6 +662,7 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
           onsessioninitialized: (sid) => {
             transports.set(sid, transport);
             sessionLastActive.set(sid, Date.now());
+            log("info", "session_created", { session_id: sid.slice(0, 8) });
           },
         });
 
@@ -597,6 +671,7 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
           if (sid) {
             transports.delete(sid);
             sessionLastActive.delete(sid);
+            log("info", "session_closed", { session_id: sid.slice(0, 8) });
           }
         };
 
@@ -642,10 +717,11 @@ async function startHttp(config: ServerConfig, index: OperationsIndex) {
 
   httpServer.listen(port, () => {
     console.error(`F5 XC MCP Server running on http://localhost:${port}/mcp`);
+    log("info", "http_listening", { port, path: "/mcp" });
   });
 
   process.on("SIGINT", async () => {
-    console.error("Shutting down...");
+    log("info", "shutdown", { reason: "sigint" });
     clearInterval(cleanupInterval);
     for (const [sid, transport] of transports) {
       await transport.close();
@@ -662,11 +738,28 @@ async function main() {
 
   const transport = process.env.MCP_TRANSPORT?.toLowerCase();
 
+  // Auth gate is HTTP-only. Parsing it here for stdio would surface fatal
+  // errors on partial config to users who don't use HTTP at all.
+  let authConfig: AuthConfig = { enabled: false };
+  if (transport === "http") {
+    try {
+      authConfig = parseAuthConfig();
+    } catch (err) {
+      console.error(`Fatal: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
+
   console.error(`F5 XC MCP Server v${VERSION} starting...`);
-  console.error(`  Tenants: ${config.tenants.map((t) => `${t.name} (${t.tenantUrl})`).join(", ")}`);
-  console.error(`  Operations indexed: ${index.totalOperations}`);
-  console.error(`  Categories: ${index.categories.length}`);
-  console.error(`  Transport: ${transport === "http" ? "HTTP" : "stdio"}`);
+  log("info", "startup", {
+    version: VERSION,
+    tenants: config.tenants.map((t) => ({ name: t.name, url: t.tenantUrl })),
+    operations_indexed: index.totalOperations,
+    categories: index.categories.length,
+    transport: transport === "http" ? "http" : "stdio",
+    auth_enabled: authConfig.enabled,
+    auth_header: authConfig.enabled ? authConfig.headerName : null,
+  });
 
   // Non-blocking update check — log to stderr, never delay startup
   checkForUpdate().then((update) => {
@@ -677,7 +770,7 @@ async function main() {
   }).catch(() => { /* ignore */ });
 
   if (transport === "http") {
-    await startHttp(config, index);
+    await startHttp(config, index, authConfig);
   } else {
     await startStdio(config, index);
   }

@@ -44,7 +44,7 @@ The biggest challenge with API-heavy MCP tools is context bloat. Every response 
 | Mode | Set via | Used by | How it works |
 |------|---------|---------|--------------|
 | **stdio** (default) | `MCP_TRANSPORT=stdio` or unset | Claude Code | Client spawns the server as a subprocess, communicates over stdin/stdout |
-| **http** | `MCP_TRANSPORT=http` | ChatGPT, remote clients | Server listens on HTTP (default port 3000), clients connect to `/mcp` |
+| **http** | `MCP_TRANSPORT=http` | ChatGPT, Bifrost, remote clients | Server listens on HTTP (default port 3000). Clients connect to **`/mcp`** — pointing at `/` returns 404. |
 
 ---
 
@@ -211,6 +211,22 @@ XC_TENANT_DEV_DEFAULT_NAMESPACE=dev-sandbox
 
 An explicit namespace always takes priority. If neither is set, the server asks the user to pick one.
 
+## HTTP Endpoint and Security
+
+The HTTP transport serves a **single endpoint**: `/mcp`. All MCP traffic — `POST` for client-to-server messages, `GET` for the SSE streaming channel, `DELETE` for session teardown — goes to this exact path. Pointing a client at the bare host (`/`) returns 404. When configuring Bifrost, the ChatGPT connector, or any other MCP HTTP client, the connector URL must end in `/mcp` (for example: `https://xc-mcp.example.com/mcp`).
+
+When deploying the HTTP transport publicly (for example, behind an F5 XC public load balancer), set both `MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE`. Without them the `/mcp` endpoint accepts unauthenticated requests — backward-compatible behavior preserved for local development, but never appropriate on the open internet.
+
+```bash
+# Example: require X-API-Key on every request
+MCP_AUTH_HEADER_NAME=X-API-Key
+MCP_AUTH_HEADER_VALUE=<long-random-secret>
+```
+
+The check runs before body parsing, so failed requests never create a session. Failed auth events are logged at `warn` level with the peer IP and the expected header name (the supplied value is never logged).
+
+Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
+
 ---
 
 ## Environment Variables
@@ -225,8 +241,11 @@ An explicit namespace always takes priority. If neither is set, the server asks 
 | `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` | No | -- | Default namespace (multi-tenant mode) |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
+| `MCP_AUTH_HEADER_NAME` | No* | -- | Name of the auth header required on every `/mcp` HTTP request (e.g. `X-API-Key`). Optional but strongly recommended for any public deployment. |
+| `MCP_AUTH_HEADER_VALUE` | No* | -- | Expected value for the auth header. Compared in constant time. Inject via secret-store; never bake into the image. |
+| `MCP_LOG_LEVEL` | No | `info` | Log level: `debug` \| `info` \| `warn` \| `error`. At `debug`, each access-log line additionally includes the parsed JSON-RPC request body (capped at 4 KB chars). Response bodies are never logged. |
 
-*Either single-tenant or multi-tenant variables are required.
+*Either single-tenant or multi-tenant variables are required. *`MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE` must both be set together or both unset; setting only one is a fatal startup error.
 
 ---
 
@@ -303,7 +322,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 211 unit tests
+npm test                 # Run 228 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 
