@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 -- 2026-05-05
+
+### HTTP header auth and structured access logging
+
+Hardens the HTTP transport for public deployment behind an F5 XC LB. Adds an opt-in shared-secret header gate and emits one structured JSON log line per request so operators can diagnose 4xx responses from logs alone. Stdio transport is unchanged.
+
+- **HTTP header auth gate** -- set `MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE` to require a matching header on every `/mcp` request. Mismatches return `401` before request body parsing. Comparison uses `node:crypto` `timingSafeEqual` to avoid timing leaks. When neither env var is set, the server behaves exactly as before.
+- **Structured access logs** -- one JSON line per `/mcp` request with method, status, latency, session id, and (for `tools/call`) the invoked tool name. Replaces the previous near-silent default, so 400s are now grep-able.
+- **Session lifecycle events** -- `session.created`, `session.expired`, and `session.closed` now emit structured log entries, making it easier to correlate "session expired" with the next request's failure.
+- **Configurable log level** -- `MCP_LOG_LEVEL` (default `info`) controls the structured logger. Levels: `debug`, `info`, `warn`, `error`.
+- **Documentation** -- README documents the three new env vars and makes the `/mcp` endpoint path explicit.
+- **Unit tests** -- new `auth.test.ts` and `logger.test.ts` cover env parsing, constant-time check, case-insensitive header lookup, level filtering, and JSON-shape edge cases.
+
 ## 0.2.0 -- 2026-04-30
 
 ### Patch, diff, wait, and access log tools
