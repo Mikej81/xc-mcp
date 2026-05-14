@@ -28,8 +28,8 @@ export function validateTenantUrl(url: string): string {
 /**
  * Scan environment variables for tenant configurations.
  *
- * Named tenants: XC_TENANT_<NAME>_URL + XC_TENANT_<NAME>_TOKEN
- * Legacy single tenant: XC_API_TOKEN + XC_TENANT_URL
+ * Named tenants: XC_TENANT_<NAME>_URL + auth (TOKEN or P12_PATH/P12_PASSWORD)
+ * Legacy single tenant: XC_TENANT_URL + auth (XC_API_TOKEN or XC_API_P12_PATH/PASSWORD)
  */
 export function parseTenantEnvVars(): TenantConfig[] {
   const tenants: TenantConfig[] = [];
@@ -47,19 +47,17 @@ export function parseTenantEnvVars(): TenantConfig[] {
 
   for (const name of names) {
     const url = process.env[`XC_TENANT_${name}_URL`];
-    const token = process.env[`XC_TENANT_${name}_TOKEN`];
-
-    if (!url || !token) {
-      console.error(
-        `Error: Found XC_TENANT_${name}_URL but missing XC_TENANT_${name}_TOKEN (or vice versa). Both are required.`,
-      );
+    if (!url) {
+      console.error(`Error: XC_TENANT_${name}_URL is required.`);
       process.exit(1);
     }
 
+    const auth = resolveAuthEnv(`XC_TENANT_${name}`);
     const defaultNamespace = process.env[`XC_TENANT_${name}_DEFAULT_NAMESPACE`];
+
     tenants.push({
       name: name.toLowerCase(),
-      apiToken: token,
+      ...auth,
       tenantUrl: validateTenantUrl(url),
       ...(defaultNamespace ? { defaultNamespace } : {}),
     });
@@ -71,13 +69,19 @@ export function parseTenantEnvVars(): TenantConfig[] {
 
   // Fall back to legacy single-tenant env vars
   const apiToken = process.env.XC_API_TOKEN;
+  const p12Path = process.env.XC_API_P12_PATH;
+  const p12Password = process.env.XC_API_P12_PASSWORD;
   const tenantUrl = process.env.XC_TENANT_URL;
 
-  if (!apiToken && !tenantUrl) {
+  if (!apiToken && !p12Path && !p12Password && !tenantUrl) {
     console.error(
       "Error: No tenant configuration found.\n\n" +
-        "Single tenant:\n" +
+        "Single tenant (API token):\n" +
         "  XC_API_TOKEN=your-token\n" +
+        "  XC_TENANT_URL=https://your-tenant.console.ves.volterra.io\n\n" +
+        "Single tenant (P12 mTLS):\n" +
+        "  XC_API_P12_PATH=/path/to/cert.p12\n" +
+        "  XC_API_P12_PASSWORD=your-p12-password\n" +
         "  XC_TENANT_URL=https://your-tenant.console.ves.volterra.io\n\n" +
         "Multiple tenants:\n" +
         "  XC_TENANT_PROD_URL=https://prod.console.ves.volterra.io\n" +
@@ -88,25 +92,62 @@ export function parseTenantEnvVars(): TenantConfig[] {
     process.exit(1);
   }
 
-  if (!apiToken) {
-    console.error("Error: XC_API_TOKEN environment variable is required.");
-    process.exit(1);
-  }
-
   if (!tenantUrl) {
     console.error("Error: XC_TENANT_URL environment variable is required.");
     process.exit(1);
   }
 
+  const auth = resolveAuthEnv("XC_API");
   const defaultNamespace = process.env.XC_DEFAULT_NAMESPACE;
+
   tenants.push({
     name: "default",
-    apiToken,
+    ...auth,
     tenantUrl: validateTenantUrl(tenantUrl),
     ...(defaultNamespace ? { defaultNamespace } : {}),
   });
 
   return tenants;
+}
+
+/**
+ * Read auth env vars for a given prefix (e.g. "XC_API" or "XC_TENANT_PROD"),
+ * enforcing exactly one method: `_TOKEN` or `_P12_PATH`+`_P12_PASSWORD`.
+ * Exits the process on any misconfiguration.
+ */
+function resolveAuthEnv(
+  envPrefix: string,
+): { apiToken: string } | { p12Path: string; p12Password: string } {
+  const tokenVar = `${envPrefix}_TOKEN`;
+  const p12PathVar = `${envPrefix}_P12_PATH`;
+  const p12PasswordVar = `${envPrefix}_P12_PASSWORD`;
+  const token = process.env[tokenVar];
+  const p12Path = process.env[p12PathVar];
+  const p12Password = process.env[p12PasswordVar];
+
+  if (token && (p12Path || p12Password)) {
+    console.error(
+      `Error: ${tokenVar} and ${p12PathVar}/${p12PasswordVar} are mutually exclusive. Use one auth method.`,
+    );
+    process.exit(1);
+  }
+
+  if (!!p12Path !== !!p12Password) {
+    console.error(`Error: ${p12PathVar} and ${p12PasswordVar} must both be set together.`);
+    process.exit(1);
+  }
+
+  if (token) {
+    return { apiToken: token };
+  }
+  if (p12Path && p12Password) {
+    return { p12Path, p12Password };
+  }
+
+  console.error(
+    `Error: No auth configured. Set ${tokenVar} or ${p12PathVar}+${p12PasswordVar}.`,
+  );
+  process.exit(1);
 }
 
 /**

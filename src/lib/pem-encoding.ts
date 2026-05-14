@@ -97,7 +97,7 @@ export async function encodePemFields(
 
   if (isRawPem(clearSecretUrl) && isPrivateKeyPem(clearSecretUrl)) {
     // Blindfold-encrypt and move from clear_secret_info to blindfold_secret_info
-    const params = await fetchBlindfoldParams(config.tenantUrl, config.apiToken);
+    const params = await fetchBlindfoldParams(config);
     const encrypted = blindfoldEncrypt(clearSecretUrl, params);
 
     // Remove clear_secret_info
@@ -108,7 +108,7 @@ export async function encodePemFields(
     setNestedValue(cloned, BLINDFOLD_PATH, `string:///${encrypted}`);
   } else if (isRawPem(blindfoldLocation) && isPrivateKeyPem(blindfoldLocation)) {
     // Blindfold-encrypt in place
-    const params = await fetchBlindfoldParams(config.tenantUrl, config.apiToken);
+    const params = await fetchBlindfoldParams(config);
     const encrypted = blindfoldEncrypt(blindfoldLocation, params);
     setNestedValue(cloned, BLINDFOLD_PATH, `string:///${encrypted}`);
   }

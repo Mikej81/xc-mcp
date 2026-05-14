@@ -6,6 +6,7 @@
  * Venafi driver (example/venafi.ps1).
  */
 import crypto from "node:crypto";
+import type { TenantConfig } from "../types/index.js";
 
 export interface BlindfoldParams {
   policyId: number;
@@ -24,21 +25,32 @@ const PUBLIC_KEY_URL = "/api/secret_management/get_public_key";
  * F5 XC secret management API.
  */
 export async function fetchBlindfoldParams(
-  tenantUrl: string,
-  apiToken: string,
+  config: TenantConfig,
 ): Promise<BlindfoldParams> {
   const headers: Record<string, string> = {
-    Authorization: `APIToken ${apiToken}`,
     Accept: "application/json",
   };
+  if (config.apiToken) {
+    headers.Authorization = `APIToken ${config.apiToken}`;
+  } else if (!config.p12Dispatcher) {
+    throw new Error(
+      `Tenant "${config.name}" has no auth configured (neither API token nor loaded P12 dispatcher).`,
+    );
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
+  const fetchInit: Parameters<typeof fetch>[1] = {
+    headers,
+    signal: controller.signal,
+    ...(config.p12Dispatcher ? { dispatcher: config.p12Dispatcher } : {}),
+  };
+
   try {
   const [policyRes, pubKeyRes] = await Promise.all([
-    fetch(new URL(POLICY_URL, tenantUrl).toString(), { headers, signal: controller.signal }),
-    fetch(new URL(PUBLIC_KEY_URL, tenantUrl).toString(), { headers, signal: controller.signal }),
+    fetch(new URL(POLICY_URL, config.tenantUrl).toString(), fetchInit),
+    fetch(new URL(PUBLIC_KEY_URL, config.tenantUrl).toString(), fetchInit),
   ]);
 
   if (!policyRes.ok) {

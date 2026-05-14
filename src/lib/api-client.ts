@@ -44,9 +44,11 @@ export async function callApi(
   }
 
   const headers: Record<string, string> = {
-    Authorization: `APIToken ${config.apiToken}`,
     Accept: "application/json",
   };
+  if (config.apiToken) {
+    headers.Authorization = `APIToken ${config.apiToken}`;
+  }
 
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -61,6 +63,7 @@ export async function callApi(
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
+      ...(config.p12Dispatcher ? { dispatcher: config.p12Dispatcher } : {}),
     });
 
     const responseHeaders: Record<string, string> = {};

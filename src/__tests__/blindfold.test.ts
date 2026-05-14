@@ -133,10 +133,11 @@ describe("fetchBlindfoldParams", () => {
 
     vi.stubGlobal("fetch", mockFetch);
 
-    const params = await fetchBlindfoldParams(
-      "https://test.ves.volterra.io",
-      "my-token",
-    );
+    const params = await fetchBlindfoldParams({
+      name: "test",
+      apiToken: "my-token",
+      tenantUrl: "https://test.ves.volterra.io",
+    });
 
     expect(params.policyId).toBe(42);
     expect(params.tenant).toBe("my-tenant");
@@ -162,7 +163,11 @@ describe("fetchBlindfoldParams", () => {
     );
 
     await expect(
-      fetchBlindfoldParams("https://test.ves.volterra.io", "bad-token"),
+      fetchBlindfoldParams({
+        name: "test",
+        apiToken: "bad-token",
+        tenantUrl: "https://test.ves.volterra.io",
+      }),
     ).rejects.toThrow("Failed to fetch policy document");
   });
 
@@ -176,7 +181,42 @@ describe("fetchBlindfoldParams", () => {
     );
 
     await expect(
-      fetchBlindfoldParams("https://test.ves.volterra.io", "tok"),
+      fetchBlindfoldParams({
+        name: "test",
+        apiToken: "tok",
+        tenantUrl: "https://test.ves.volterra.io",
+      }),
     ).rejects.toThrow("Failed to fetch public key");
+  });
+
+  it("uses mTLS dispatcher and omits Authorization header for P12 tenants", async () => {
+    const stubDispatcher = { stub: "dispatcher" };
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { policy_id: 7, tenant: "t" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { modulus_base64: "bQ==", public_exponent_base64: "AQAB" },
+        }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    await fetchBlindfoldParams({
+      name: "test",
+      p12Path: "/tmp/x.p12",
+      p12Password: "pw",
+      p12Dispatcher: stubDispatcher,
+      tenantUrl: "https://test.ves.volterra.io",
+    });
+
+    const call1 = mockFetch.mock.calls[0][1] as {
+      headers: Record<string, string>;
+      dispatcher?: unknown;
+    };
+    expect(call1.headers.Authorization).toBeUndefined();
+    expect(call1.dispatcher).toBe(stubDispatcher);
   });
 });

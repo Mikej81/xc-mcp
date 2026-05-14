@@ -113,4 +113,28 @@ describe("callApi", () => {
     const url = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(url).toContain("/api/default/resources");
   });
+
+  it("omits Authorization header and passes dispatcher when tenant has P12 dispatcher", async () => {
+    mockFetch({});
+    const stubDispatcher = { stub: "dispatcher" };
+    const p12Config: TenantConfig = {
+      name: "mtls",
+      p12Path: "/tmp/cert.p12",
+      p12Password: "pw",
+      p12Dispatcher: stubDispatcher,
+      tenantUrl: "https://mtls.console.ves.volterra.io",
+    };
+    await callApi(p12Config, "GET", "/api/test");
+    const callArgs = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(callArgs[1].headers.Authorization).toBeUndefined();
+    expect(callArgs[1].dispatcher).toBe(stubDispatcher);
+  });
+
+  it("uses APIToken header when tenant has apiToken (no dispatcher)", async () => {
+    mockFetch({});
+    await callApi(config, "GET", "/api/test");
+    const callArgs = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(callArgs[1].headers.Authorization).toBe("APIToken test-token");
+    expect(callArgs[1].dispatcher).toBeUndefined();
+  });
 });
