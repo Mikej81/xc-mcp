@@ -65,10 +65,7 @@ describe("encodePemFields", () => {
     );
 
     // Verify blindfold functions were called
-    expect(mockFetchBlindfoldParams).toHaveBeenCalledWith(
-      config.tenantUrl,
-      config.apiToken,
-    );
+    expect(mockFetchBlindfoldParams).toHaveBeenCalledWith(config);
     expect(mockBlindfoldEncrypt).toHaveBeenCalledWith(RAW_KEY_PEM, expect.any(Object));
   });
 

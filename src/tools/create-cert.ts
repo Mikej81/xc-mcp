@@ -37,7 +37,7 @@ export async function handleCreateCert(
     const keyPem = readFileSync(keyPath, "utf-8").trim();
 
     // Blindfold-encrypt the private key
-    const blindfoldParams = await fetchBlindfoldParams(config.tenantUrl, config.apiToken);
+    const blindfoldParams = await fetchBlindfoldParams(config);
     const encryptedKey = blindfoldEncrypt(keyPem, blindfoldParams);
 
     // Create the certificate object

@@ -184,6 +184,62 @@ describe("parseTenantEnvVars", () => {
     const result = parseTenantEnvVars();
     expect(result[0].defaultNamespace).toBeUndefined();
   });
+
+  it("parses named tenant with P12 credentials instead of token", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_P12_PATH = "/path/to/cert.p12";
+    process.env.XC_TENANT_PROD_P12_PASSWORD = "secret";
+    const result = parseTenantEnvVars();
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("prod");
+    expect(result[0].p12Path).toBe("/path/to/cert.p12");
+    expect(result[0].p12Password).toBe("secret");
+    expect(result[0].apiToken).toBeUndefined();
+  });
+
+  it("parses legacy single-tenant P12 credentials", () => {
+    process.env.XC_TENANT_URL = "https://legacy.console.ves.volterra.io";
+    process.env.XC_API_P12_PATH = "/legacy/cert.p12";
+    process.env.XC_API_P12_PASSWORD = "secret";
+    const result = parseTenantEnvVars();
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("default");
+    expect(result[0].p12Path).toBe("/legacy/cert.p12");
+    expect(result[0].p12Password).toBe("secret");
+    expect(result[0].apiToken).toBeUndefined();
+  });
+
+  it("exits when named tenant has both TOKEN and P12_PATH", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_TOKEN = "tok";
+    process.env.XC_TENANT_PROD_P12_PATH = "/path/to/cert.p12";
+    process.env.XC_TENANT_PROD_P12_PASSWORD = "secret";
+    expect(() => parseTenantEnvVars()).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits when legacy tenant has both TOKEN and P12_PATH", () => {
+    process.env.XC_TENANT_URL = "https://legacy.console.ves.volterra.io";
+    process.env.XC_API_TOKEN = "tok";
+    process.env.XC_API_P12_PATH = "/legacy/cert.p12";
+    process.env.XC_API_P12_PASSWORD = "secret";
+    expect(() => parseTenantEnvVars()).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits when P12_PATH is set without P12_PASSWORD", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_P12_PATH = "/path/to/cert.p12";
+    expect(() => parseTenantEnvVars()).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits when P12_PASSWORD is set without P12_PATH", () => {
+    process.env.XC_TENANT_PROD_URL = "https://prod.console.ves.volterra.io";
+    process.env.XC_TENANT_PROD_P12_PASSWORD = "secret";
+    expect(() => parseTenantEnvVars()).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("resolveNamespace", () => {

@@ -57,7 +57,10 @@ describe("handleCreateCert", () => {
     expect(result.isError).toBeUndefined();
 
     // Verify blindfold was called
-    expect(mockFetchBlindfold).toHaveBeenCalledWith("https://test.ves.volterra.io", "tok");
+    expect(mockFetchBlindfold).toHaveBeenCalledWith(expect.objectContaining({
+      tenantUrl: "https://test.ves.volterra.io",
+      apiToken: "tok",
+    }));
     expect(mockBlindEncrypt).toHaveBeenCalled();
 
     // Verify API call body has blindfold, not clear_secret

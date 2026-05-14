@@ -79,9 +79,18 @@ export interface ApiResponse {
   truncated?: boolean;
 }
 
+import type { Dispatcher } from "undici";
+
 export interface TenantConfig {
   name: string;
-  apiToken: string;
+  /** API token auth. Mutually exclusive with p12Path. */
+  apiToken?: string;
+  /** P12 (PKCS#12) file path for mTLS auth. Mutually exclusive with apiToken. */
+  p12Path?: string;
+  /** Passphrase for the P12 file. Required when p12Path is set. */
+  p12Password?: string;
+  /** Populated at startup from p12Path/p12Password; consumed by fetch via its dispatcher option. */
+  p12Dispatcher?: Dispatcher;
   tenantUrl: string;
   defaultNamespace?: string;
 }

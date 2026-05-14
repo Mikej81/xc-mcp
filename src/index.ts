@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import { loadIndex } from "./lib/spec-index.js";
 import { parseTenantEnvVars, resolveTenant, resolveNamespace } from "./lib/tenant.js";
+import { loadP12Dispatcher } from "./lib/p12.js";
 import type { OperationsIndex } from "./types/index.js";
 import type { ServerConfig, TenantConfig } from "./types/index.js";
 import { handleDiscover } from "./tools/discover.js";
@@ -52,6 +53,21 @@ function resolvePaths() {
 
 function validateEnv(): ServerConfig {
   const tenants = parseTenantEnvVars();
+
+  // Eagerly load P12 dispatchers so a bad path/password fails fast at startup.
+  for (const tenant of tenants) {
+    if (tenant.p12Path && tenant.p12Password) {
+      try {
+        tenant.p12Dispatcher = loadP12Dispatcher(tenant.p12Path, tenant.p12Password);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(
+          `Error: Failed to load P12 for tenant "${tenant.name}": ${reason}`,
+        );
+        process.exit(1);
+      }
+    }
+  }
 
   const { specsDir, indexPath } = resolvePaths();
 
