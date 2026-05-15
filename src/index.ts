@@ -27,6 +27,7 @@ import { handleQueryAccessLogs } from "./tools/query-access-logs.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
 import { parseAuthConfig, checkAuth, type AuthConfig } from "./lib/auth.js";
 import { log } from "./lib/logger.js";
+import { installTasksRfcCompat } from "./lib/tasks-rfc-compat.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -546,6 +547,7 @@ function createMcpServer(config: ServerConfig, index: OperationsIndex): McpServe
   registerTools(server, config, index);
   registerResources(server, config, index);
   registerPrompts(server, config);
+  installTasksRfcCompat(server);
   return server;
 }
 

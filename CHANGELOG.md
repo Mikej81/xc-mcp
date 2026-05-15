@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 -- 2026-05-15
+
+### MCP Tasks RFC compatibility shim
+
+Fixes tool discovery failures for MCP clients that do not yet understand the Tasks RFC (Bifrost, some OpenWebUI builds). MCP SDK ≥1.24 injects `execution: { taskSupport: "forbidden" }` on every registered tool to mark it as a sync-only tool. Older clients misread that unknown field as "uncallable" and never invoke the tool, even though the connection, `initialize`, and `tools/list` all succeed.
+
+- **Capability-aware shim** in `src/lib/tasks-rfc-compat.ts` wraps the SDK's `tools/list` handler. If the client advertised `capabilities.tasks` during `initialize`, the response is passed through untouched. Otherwise the `execution` field is stripped from each tool descriptor on the wire. Server-side call routing is unaffected -- the SDK validates `taskSupport` against the registered tool, not the wire response.
+- **Wired in** `src/index.ts` immediately after `registerTools()` / `registerResources()` / `registerPrompts()`.
+- **Unit tests** -- new `tasks-rfc-compat.test.ts` covers the strip helper edge cases plus an integration test that exercises both the with-tasks-capability and without-tasks-capability paths against a real `McpServer` instance.
+
+## 0.4.0 -- 2026-05-12
+
+### P12 mTLS as optional auth
+
+Adds P12 certificate-based mTLS authentication as an alternative to the API token for the F5 XC tenant connection. Useful for environments where short-lived API tokens are not available or where mTLS is required by policy.
+
 ## 0.3.0 -- 2026-05-05
 
 ### HTTP header auth and structured access logging
