@@ -227,6 +227,10 @@ The check runs before body parsing, so failed requests never create a session. F
 
 Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
 
+### Client compatibility (MCP Tasks RFC)
+
+The MCP SDK marks every tool with `execution.taskSupport: "forbidden"` per the Tasks RFC. Some current clients (Bifrost, certain OpenWebUI builds) misread that field and skip the tool. The server detects clients that did not advertise `capabilities.tasks` during `initialize` and strips the field from the `tools/list` response for those sessions only. Tasks-RFC-aware clients still receive the full descriptor. No configuration needed.
+
 ---
 
 ## Environment Variables
