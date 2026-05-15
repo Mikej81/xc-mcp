@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -46,13 +46,39 @@ jobs:
       - name: Lowercase image name
         run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
+      - name: Read version from package.json
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Guard release branch name matches package version
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/release/}"
+          if [[ "${BRANCH}" != "${VERSION}" ]]; then
+            echo "::error::Branch release/${BRANCH} does not match package.json version ${VERSION}. Bump package.json or rename the branch."
+            exit 1
+          fi
+
       - name: Determine image tags
         id: tags
+        env:
+          VERSION: ${{ steps.pkg.outputs.version }}
         run: |
-          TAGS="${IMAGE_NAME}:latest"
+          SHORT_SHA="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            TAGS="${TAGS},${IMAGE_NAME}:${VERSION}"
+            # Tagged release: clean version + latest
+            TAGS="${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:latest"
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            # Main: clean version + latest (every merge to main is shippable)
+            TAGS="${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:latest"
+          elif [[ "${GITHUB_REF}" == refs/heads/release/* ]]; then
+            # Release branch: floating RC + immutable RC-per-commit
+            TAGS="${IMAGE_NAME}:${VERSION}-rc,${IMAGE_NAME}:${VERSION}-rc.${SHORT_SHA}"
+          else
+            # Defensive fallback (shouldn't fire given the triggers)
+            TAGS="${IMAGE_NAME}:${VERSION}-dev.${SHORT_SHA}"
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
 
