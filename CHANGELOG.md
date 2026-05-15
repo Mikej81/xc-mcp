@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2 -- 2026-05-15
+
+### Tool description steering for gateway use
+
+When MCP tools are exposed to an LLM through a gateway like Bifrost, the model chooses which tool to call from the descriptions alone. The 0.4.1 descriptions said "for common operations you can call xc_call_api directly," which actively biased LLMs away from the specific listing tools (xc_list_namespaces, xc_list_resources, etc.) and toward the generic xc_call_api escape hatch. That mattered in deployments where xc_call_api was kept in a "manual approval" tool-execution policy while the specific tools were auto-executable -- the agent loop never closed.
+
+- **`xc_call_api`** description rewritten to position it as a last-resort escape hatch. Lists the specific tools to prefer first (xc_list_namespaces, xc_list_resources, xc_list_tenants, xc_query_access_logs, xc_lb_wait_ready, xc_diff_resource, xc_patch_resource, xc_create_cert). Also clarifies that listing namespaces themselves is /api/web/namespaces (not /api/config/namespaces), since gpt-class models were guessing the wrong path from the resource pattern.
+- **`xc_discover_apis`** description updated to recommend specific list tools first; removed xc_call_api from the "call directly" hint.
+- No protocol or schema changes. No new env vars. Drop-in upgrade.
+
 ## 0.4.1 -- 2026-05-15
 
 ### MCP Tasks RFC compatibility shim
