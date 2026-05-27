@@ -57,11 +57,25 @@ export async function callApi(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+  let serializedBody: string | undefined;
+  if (body === undefined) {
+    serializedBody = undefined;
+  } else if (typeof body === "string") {
+    try {
+      JSON.parse(body);
+      serializedBody = body;
+    } catch {
+      serializedBody = JSON.stringify(body);
+    }
+  } else {
+    serializedBody = JSON.stringify(body);
+  }
+
   try {
     const response = await fetch(url.toString(), {
       method: method.toUpperCase(),
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: serializedBody,
       signal: controller.signal,
       ...(config.p12Dispatcher ? { dispatcher: config.p12Dispatcher } : {}),
     });
