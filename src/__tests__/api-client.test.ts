@@ -169,9 +169,10 @@ describe("callApi", () => {
 
   it("encodes JSON-primitive strings (numbers, booleans, null) as JSON strings", async () => {
     for (const input of ["42", "true", "null"]) {
+      (fetch as ReturnType<typeof vi.fn>).mockClear();
       mockFetch({});
       await callApi(config, "POST", "/api/test", { body: input });
-      const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[(fetch as ReturnType<typeof vi.fn>).mock.calls.length - 1][1].body;
+      const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
       expect(sentBody).toBe(JSON.stringify(input));
     }
   });
