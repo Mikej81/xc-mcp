@@ -107,6 +107,7 @@ export async function handleCallApi(
     pathParams: params.path_params,
     queryParams: params.query_params,
     body: await encodePemFields(config, params.path, preparedBody),
+    skipTruncation: !!params.response_filter,
   });
 
   const output: any = {

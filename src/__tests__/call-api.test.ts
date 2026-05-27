@@ -80,6 +80,7 @@ describe("handleCallApi", () => {
       pathParams: { ns: "default" },
       queryParams: { limit: "10" },
       body: { name: "new-item" },
+      skipTruncation: false,
     });
   });
 
@@ -200,6 +201,55 @@ describe("handleCallApi", () => {
     expect(parsed.filter_warning).toContain("matched no fields");
     expect(parsed.filter_warning).toContain("items");
     expect(parsed.filter_warning).toContain("metadata");
+  });
+
+  it("applies response_filter even when the raw body would exceed the 50KB cap", async () => {
+    const bigPayload = "x".repeat(60 * 1024);
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: {
+        items: [{ name: "lb1", giant_field: bigPayload }],
+        metadata: { total: 1 },
+      },
+    });
+
+    const result = await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+      response_filter: "metadata",
+    });
+
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/test",
+      expect.objectContaining({ skipTruncation: true }),
+    );
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.filtered).toBe(true);
+    expect(parsed.body.metadata).toEqual({ total: 1 });
+    expect(parsed.body.items).toBeUndefined();
+    expect(parsed.warning).toBeUndefined();
+  });
+
+  it("does NOT request skipTruncation when no response_filter is provided", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [] },
+    });
+
+    await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+    });
+
+    const opts = mockCallApi.mock.calls[0][3];
+    expect(opts.skipTruncation).not.toBe(true);
   });
 });
 
