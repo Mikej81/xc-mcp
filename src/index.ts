@@ -191,7 +191,9 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   server.tool(
     "xc_list_resources",
     "List resources in a namespace. Common types: http_loadbalancers, tcp_loadbalancers, " +
-      "origin_pools, healthchecks, app_firewalls, certificates, dns_zones, service_policys.",
+      "origin_pools, healthchecks, app_firewalls, certificates, service_policys. " +
+      "DNS types (dns_zones, dns_load_balancers, dns_lb_pools, dns_lb_health_checks) " +
+      "are routed to the DNS API group automatically.",
     {
       namespace: z.string().optional().describe("Namespace (optional if default configured)"),
       resource_type: z.string().describe('Resource type. Example: "http_loadbalancers"'),

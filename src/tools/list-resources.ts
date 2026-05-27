@@ -1,6 +1,22 @@
 import type { ListResourcesParams, TenantConfig } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
 
+const DNS_API_GROUP_RESOURCES = new Set([
+  "dns_zones",
+  "dns_load_balancers",
+  "dns_lb_pools",
+  "dns_lb_health_checks",
+]);
+
+function buildListPath(namespace: string, resourceType: string): string {
+  const ns = encodeURIComponent(namespace);
+  const rt = encodeURIComponent(resourceType);
+  if (DNS_API_GROUP_RESOURCES.has(resourceType)) {
+    return `/api/config/dns/namespaces/${ns}/${rt}`;
+  }
+  return `/api/config/namespaces/${ns}/${rt}`;
+}
+
 /**
  * Extract specified fields from an item.
  * Supports dot-notation paths like "spec.origin_servers".
@@ -25,7 +41,7 @@ export async function handleListResources(
   config: TenantConfig,
   params: ListResourcesParams,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
-  const path = `/api/config/namespaces/${encodeURIComponent(params.namespace)}/${encodeURIComponent(params.resource_type)}`;
+  const path = buildListPath(params.namespace, params.resource_type);
 
   const queryParams: Record<string, string> = {};
   if (params.label_selector) {

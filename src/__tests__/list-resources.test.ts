@@ -182,6 +182,64 @@ describe("handleListResources", () => {
     expect(text).toContain("system_metadata.creation_timestamp");
     expect(text).toContain("2026-01-01");
   });
+
+  it("routes dns_zones to the /api/config/dns/ API group", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "example.com" }] },
+    });
+
+    await handleListResources(config, {
+      namespace: "system",
+      resource_type: "dns_zones",
+    });
+
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/config/dns/namespaces/system/dns_zones",
+      expect.anything(),
+    );
+  });
+
+  it("routes dns_load_balancers, dns_lb_pools, and dns_lb_health_checks to the DNS group", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [] },
+    });
+
+    for (const rt of ["dns_load_balancers", "dns_lb_pools", "dns_lb_health_checks"]) {
+      mockCallApi.mockClear();
+      await handleListResources(config, { namespace: "default", resource_type: rt });
+      const calledPath = mockCallApi.mock.calls[0][2];
+      expect(calledPath).toBe(`/api/config/dns/namespaces/default/${rt}`);
+    }
+  });
+
+  it("keeps non-DNS resource types on the default /api/config/ group", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [] },
+    });
+
+    await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+    });
+
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/config/namespaces/default/http_loadbalancers",
+      expect.anything(),
+    );
+  });
 });
 
 describe("namespace resolution with handleListResources", () => {
