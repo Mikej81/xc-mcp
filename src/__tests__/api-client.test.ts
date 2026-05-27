@@ -137,4 +137,43 @@ describe("callApi", () => {
     expect(callArgs[1].headers.Authorization).toBe("APIToken test-token");
     expect(callArgs[1].dispatcher).toBeUndefined();
   });
+
+  it("sends an object body as a JSON object on the wire", async () => {
+    mockFetch({});
+    await callApi(config, "POST", "/api/test", { body: { foo: "bar" } });
+    const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+    expect(sentBody).toBe('{"foo":"bar"}');
+  });
+
+  it("passes a JSON-string body through without double-encoding", async () => {
+    mockFetch({});
+    const preEncoded = '{"foo":"bar"}';
+    await callApi(config, "POST", "/api/test", { body: preEncoded });
+    const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+    expect(sentBody).toBe('{"foo":"bar"}');
+  });
+
+  it("encodes a plain (non-JSON) string body as a JSON string", async () => {
+    mockFetch({});
+    await callApi(config, "POST", "/api/test", { body: "hello" });
+    const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+    expect(sentBody).toBe('"hello"');
+  });
+
+  it("passes a JSON-array string body through without re-encoding", async () => {
+    mockFetch({});
+    await callApi(config, "POST", "/api/test", { body: "[1,2,3]" });
+    const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+    expect(sentBody).toBe("[1,2,3]");
+  });
+
+  it("encodes JSON-primitive strings (numbers, booleans, null) as JSON strings", async () => {
+    for (const input of ["42", "true", "null"]) {
+      (fetch as ReturnType<typeof vi.fn>).mockClear();
+      mockFetch({});
+      await callApi(config, "POST", "/api/test", { body: input });
+      const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+      expect(sentBody).toBe(JSON.stringify(input));
+    }
+  });
 });

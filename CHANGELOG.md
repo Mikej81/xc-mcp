@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.3 -- 2026-05-27
+
+### Bug fixes for generic API tool, response filtering, and DNS listing
+
+Three confirmed bugs that surfaced while configuring resources through the generic `xc_call_api` escape hatch, filtering large response bodies, and listing DNS zones on the system namespace.
+
+- **`xc_call_api` request body double-encoding** -- `callApi` in `src/lib/api-client.ts` ran every request body through `JSON.stringify`, including bodies that arrived already-encoded as a JSON string. The wire body was then a quoted, escaped JSON string rather than a JSON object, and XC rejected the request with `json: cannot unmarshal string into Go value of type map[string]json.RawMessage`. Strings that parse as a non-null JSON object or array are now forwarded verbatim. Strings that parse as JSON primitives (`"42"`, `"true"`, `"null"`) and strings that do not parse as JSON are still `JSON.stringify`-encoded, preserving the existing behavior for literal string-valued bodies.
+- **`response_filter` applied after the 50KB body cap** -- README claimed projection ran before truncation; the implementation ran it after. `handleCallApi` now passes `skipTruncation: true` to `callApi` whenever a `response_filter` is supplied, so the filter sees the full parsed body. The 60KB tool-output cap at the end of `handleCallApi` remains the final guard. An empty-string filter (`""`) is treated identically to no filter, matching the prior short-circuit in `filterResponse`.
+- **`xc_list_resources` 404 on DNS resource types** -- DNS resources live under `/api/config/dns/namespaces/...`, but the list tool unconditionally built `/api/config/namespaces/...` and got back `"API Group could not be determined"`. A file-local `DNS_API_GROUP_RESOURCES` set + `buildListPath` helper now route `dns_zones`, `dns_load_balancers`, `dns_lb_pools`, and `dns_lb_health_checks` to the DNS API group. The trailing "Example path" hint is derived from the same path the request used, so it cannot drift from the actual routing. The `xc_list_resources` tool description documents the routing explicitly.
+- **Unit tests** -- 263 tests across 25 test files (up from 250/25). New coverage: object/JSON-string/JSON-primitive/non-JSON-string body serialization, response_filter pre-truncation behavior with a 60KB payload, empty-string filter handling, DNS list routing for all four known types, and footer-path correctness for both DNS and non-DNS responses.
+- No protocol or schema changes. No new env vars. Drop-in upgrade from 0.4.2.
+
+## 0.4.2 -- 2026-05-15
+
+### Tool description steering for gateway use
+
+When MCP tools are exposed to an LLM through a gateway like Bifrost, the model chooses which tool to call from the descriptions alone. The 0.4.1 descriptions said "for common operations you can call xc_call_api directly," which actively biased LLMs away from the specific listing tools (xc_list_namespaces, xc_list_resources, etc.) and toward the generic xc_call_api escape hatch. That mattered in deployments where xc_call_api was kept in a "manual approval" tool-execution policy while the specific tools were auto-executable -- the agent loop never closed.
+
+- **`xc_call_api`** description rewritten to position it as a last-resort escape hatch. Lists the specific tools to prefer first (xc_list_namespaces, xc_list_resources, xc_list_tenants, xc_query_access_logs, xc_lb_wait_ready, xc_diff_resource, xc_patch_resource, xc_create_cert). Also clarifies that listing namespaces themselves is /api/web/namespaces (not /api/config/namespaces), since gpt-class models were guessing the wrong path from the resource pattern.
+- **`xc_discover_apis`** description updated to recommend specific list tools first; removed xc_call_api from the "call directly" hint.
+- No protocol or schema changes. No new env vars. Drop-in upgrade.
+
 ## 0.4.1 -- 2026-05-15
 
 ### MCP Tasks RFC compatibility shim

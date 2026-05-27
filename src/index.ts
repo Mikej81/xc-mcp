@@ -111,8 +111,9 @@ function withTenant(
 function registerTools(server: McpServer, config: ServerConfig, index: OperationsIndex) {
   server.tool(
     "xc_discover_apis",
-    "Search F5 XC API operations. Only needed when you don't know the API path -- " +
-      "for common resources, call xc_list_resources or xc_call_api directly.",
+    "Search F5 XC API operations. Only needed when no specific tool fits and you don't " +
+      "know the API path. For common reads, prefer xc_list_namespaces, xc_list_resources, " +
+      "xc_list_tenants, xc_query_access_logs.",
     {
       query: z.string().optional().describe("Search text (AND-matched). Example: 'load balancer'"),
       category: z.string().optional().describe("Category filter"),
@@ -140,9 +141,14 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
 
   server.tool(
     "xc_call_api",
-    "Execute an F5 XC API call. For common operations you can call this directly -- " +
-      "standard path pattern: /api/config/namespaces/{namespace}/{resource_type} for GET/list, " +
-      "add /{name} for individual resources. PEM keys in certificate bodies are auto-blindfold-encrypted. " +
+    "Generic escape hatch for any F5 XC API call. Prefer specific tools when one fits: " +
+      "xc_list_namespaces / xc_list_resources / xc_list_tenants for listing, " +
+      "xc_query_access_logs for logs, xc_lb_wait_ready for LB readiness, " +
+      "xc_diff_resource / xc_patch_resource for state changes, xc_create_cert for certs. " +
+      "Use xc_call_api only when no specific tool fits. Path pattern for resources in a namespace: " +
+      "/api/config/namespaces/{namespace}/{resource_type} (add /{name} for individual). " +
+      "Listing namespaces themselves lives at /api/web/namespaces -- prefer xc_list_namespaces. " +
+      "PEM keys in certificate bodies are auto-blindfold-encrypted. " +
       "Always use blindfold_secret_info for private keys, never clear_secret_info.",
     {
       method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).describe("HTTP method"),
@@ -185,7 +191,9 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   server.tool(
     "xc_list_resources",
     "List resources in a namespace. Common types: http_loadbalancers, tcp_loadbalancers, " +
-      "origin_pools, healthchecks, app_firewalls, certificates, dns_zones, service_policys.",
+      "origin_pools, healthchecks, app_firewalls, certificates, service_policys. " +
+      "DNS types (dns_zones, dns_load_balancers, dns_lb_pools, dns_lb_health_checks) " +
+      "are routed to the DNS API group automatically.",
     {
       namespace: z.string().optional().describe("Namespace (optional if default configured)"),
       resource_type: z.string().describe('Resource type. Example: "http_loadbalancers"'),
