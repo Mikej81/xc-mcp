@@ -24,6 +24,12 @@ import { handlePatchResource } from "./tools/patch-resource.js";
 import { handleWaitReady } from "./tools/wait-ready.js";
 import { handleDiffResource } from "./tools/diff-resource.js";
 import { handleQueryAccessLogs } from "./tools/query-access-logs.js";
+import { handleSearchResources } from "./tools/search-resources.js";
+import { handleDnsZoneStatus } from "./tools/dns-zone-status.js";
+import { handleResolveSchemaRef } from "./tools/resolve-schema-ref.js";
+import { handleLbSetRequestHeaders } from "./tools/lb-set-request-headers.js";
+import { handlePoolAttachHealthcheck, handlePoolDetachHealthcheck } from "./tools/pool-healthcheck-attach.js";
+import { handleQueryLbMetrics } from "./tools/query-lb-metrics.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
 import { parseAuthConfig, checkAuth, type AuthConfig } from "./lib/auth.js";
 import { log } from "./lib/logger.js";
@@ -140,6 +146,21 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
   );
 
   server.tool(
+    "xc_resolve_schema_ref",
+    "Resolve and expand a JSON Schema $ref within an OpenAPI spec file. " +
+      "Useful when xc_get_operation_details truncated a nested type at max_depth. " +
+      "Pass the spec_file (from xc_discover_apis output) and the ref string starting with '#/'.",
+    {
+      spec_file: z.string().describe("Spec filename (relative to f5-api/), e.g. 'docs-cloud-f5-com.0079...json'"),
+      ref: z.string().describe('JSON Schema $ref, e.g. "#/components/schemas/ves.io.schema.http_loadbalancer.SpecType"'),
+      max_depth: z.number().optional().describe("Max expansion depth (1-12, default 8)"),
+    },
+    async (params) => {
+      return handleResolveSchemaRef(config, params);
+    },
+  );
+
+  server.tool(
     "xc_call_api",
     "Generic escape hatch for any F5 XC API call. Prefer specific tools when one fits: " +
       "xc_list_namespaces / xc_list_resources / xc_list_tenants for listing, " +
@@ -201,6 +222,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
       fields: z.array(z.string()).optional().describe('Per-item fields. Example: ["spec.origin_servers"]'),
       max_items: z.number().optional().describe("Max items to return"),
+      verify: z.boolean().optional().describe("If true, probe each returned name with a GET and drop any that 404. Adds N extra requests; use sparingly."),
     },
     async (params) => {
       const tenant = withTenant(config, params.tenant);
@@ -210,6 +232,26 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
         return { content: [{ type: "text", text: ns.guidance }] };
       }
       return handleListResources(tenant, { ...params, namespace: ns });
+    },
+  );
+
+  server.tool(
+    "xc_search_resources",
+    "Find resources by name across multiple namespaces in one call. " +
+      "If 'namespaces' is omitted, scans every namespace visible to the tenant. " +
+      "name_pattern accepts a substring match or a glob with '*'.",
+    {
+      resource_type: z.string().describe('Resource type, e.g. "http_loadbalancers"'),
+      name_pattern: z.string().optional().describe("Substring or glob (* allowed)"),
+      namespaces: z.array(z.string()).optional().describe("Specific namespaces. Omit to scan all."),
+      label_selector: z.string().optional().describe("Label selector applied to each list call"),
+      max_namespaces: z.number().optional().describe("Cap on namespaces scanned"),
+      tenant: z.string().optional().describe("Tenant name"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleSearchResources(tenant, params);
     },
   );
 
@@ -310,6 +352,100 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       const tenant = withTenant(config, params.tenant);
       if ("content" in tenant) return tenant;
       return handleQueryAccessLogs(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_dns_zone_status",
+    "Diagnostic roll-up for a DNS zone: deployment status, assigned nameservers, " +
+      "Operational condition, and optional data-plane reachability probe via local_zone_file. " +
+      "Surfaces 'control_plane_active_but_data_plane_unreachable' when the two disagree.",
+    {
+      namespace: z.string().describe("Namespace (typically 'system' for tenant-wide zones)"),
+      name: z.string().describe("Zone name"),
+      include_zone_file: z.boolean().optional().describe("Probe local_zone_file to detect data-plane outages (default true)"),
+      tenant: z.string().optional().describe("Tenant name"),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleDnsZoneStatus(tenant, { ...params, include_zone_file: params.include_zone_file ?? true });
+    },
+  );
+
+  server.tool(
+    "xc_lb_set_request_headers",
+    "Add or remove request headers on an HTTP LB (LB-level spec.add_request_headers). " +
+      "Convenience wrapper over a GET/strip/PUT cycle; preserves optimistic concurrency by default.",
+    {
+      namespace: z.string(),
+      name: z.string(),
+      add: z.array(z.object({
+        name: z.string(),
+        value: z.string(),
+      })).optional(),
+      remove: z.array(z.string()).optional(),
+      tenant: z.string().optional(),
+      check_resource_version: z.boolean().optional().describe("Default true. Set false to skip optimistic-lock check."),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleLbSetRequestHeaders(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_pool_attach_healthcheck",
+    "Attach a named healthcheck to an origin_pool's spec.healthcheck list. Idempotent.",
+    {
+      namespace: z.string(),
+      pool_name: z.string(),
+      healthcheck_name: z.string(),
+      tenant: z.string().optional(),
+      check_resource_version: z.boolean().optional(),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handlePoolAttachHealthcheck(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_pool_detach_healthcheck",
+    "Remove a named healthcheck from an origin_pool's spec.healthcheck list.",
+    {
+      namespace: z.string(),
+      pool_name: z.string(),
+      healthcheck_name: z.string(),
+      tenant: z.string().optional(),
+      check_resource_version: z.boolean().optional(),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handlePoolDetachHealthcheck(tenant, params);
+    },
+  );
+
+  server.tool(
+    "xc_query_lb_metrics",
+    "Time-bucketed request counts for an HTTP LB derived from access logs. " +
+      "Returns per-bucket total + response-code-class breakdown (2xx/3xx/4xx/5xx). " +
+      "Use bucket=1m/5m/15m/1h. For raw access logs use xc_query_access_logs.",
+    {
+      namespace: z.string(),
+      lb_name: z.string(),
+      start: z.string().describe("ISO timestamp"),
+      end: z.string().describe("ISO timestamp"),
+      bucket: z.enum(["1m", "5m", "15m", "1h"]).optional(),
+      tenant: z.string().optional(),
+    },
+    async (params) => {
+      const tenant = withTenant(config, params.tenant);
+      if ("content" in tenant) return tenant;
+      return handleQueryLbMetrics(tenant, params);
     },
   );
 

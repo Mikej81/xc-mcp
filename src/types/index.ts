@@ -69,6 +69,49 @@ export interface ListResourcesParams {
   tenant?: string;
   fields?: string[];
   max_items?: number;
+  verify?: boolean;
+}
+
+export interface SearchResourcesParams {
+  resource_type: string;
+  name_pattern?: string;
+  namespaces?: string[];
+  label_selector?: string;
+  tenant?: string;
+  max_namespaces?: number;
+}
+
+export interface DnsZoneStatusParams {
+  namespace: string;
+  name: string;
+  tenant?: string;
+  include_zone_file?: boolean;
+}
+
+export interface LbSetRequestHeadersParams {
+  namespace: string;
+  name: string;
+  add?: Array<{ name: string; value: string }>;
+  remove?: string[];
+  tenant?: string;
+  check_resource_version?: boolean;
+}
+
+export interface PoolHealthcheckParams {
+  namespace: string;
+  pool_name: string;
+  healthcheck_name: string;
+  tenant?: string;
+  check_resource_version?: boolean;
+}
+
+export interface QueryLbMetricsParams {
+  namespace: string;
+  lb_name: string;
+  start: string;
+  end: string;
+  bucket?: "1m" | "5m" | "15m" | "1h";
+  tenant?: string;
 }
 
 export interface ApiResponse {
@@ -77,6 +120,16 @@ export interface ApiResponse {
   headers: Record<string, string>;
   body: unknown;
   truncated?: boolean;
+  error_category?:
+    | "backend_unavailable"
+    | "timeout"
+    | "auth_failure"
+    | "not_found"
+    | "permission_denied"
+    | "rate_limited"
+    | "validation_error"
+    | "config_conflict"
+    | "server_error";
 }
 
 import type { Dispatcher } from "undici";
