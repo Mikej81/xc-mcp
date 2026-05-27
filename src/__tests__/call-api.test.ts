@@ -248,8 +248,38 @@ describe("handleCallApi", () => {
       path: "/api/test",
     });
 
-    const opts = mockCallApi.mock.calls[0][3];
-    expect(opts.skipTruncation).not.toBe(true);
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/test",
+      expect.objectContaining({ skipTruncation: false }),
+    );
+  });
+
+  it("treats an empty response_filter as no filter (no skipTruncation, no filtering applied)", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }], metadata: { total: 1 } },
+    });
+
+    const result = await handleCallApi(config, {
+      method: "GET",
+      path: "/api/test",
+      response_filter: "",
+    });
+
+    expect(mockCallApi).toHaveBeenCalledWith(
+      config,
+      "GET",
+      "/api/test",
+      expect.objectContaining({ skipTruncation: false }),
+    );
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.filtered).toBeUndefined();
+    expect(parsed.body).toEqual({ items: [{ name: "lb1" }], metadata: { total: 1 } });
   });
 });
 
