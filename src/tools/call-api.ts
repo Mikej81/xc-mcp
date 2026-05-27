@@ -138,8 +138,12 @@ export async function handleCallApi(
 
   let text = JSON.stringify(output);
 
+  // When the compact form would exceed the tool-output cap, switch to
+  // pretty-print and truncate. The pretty form is always longer than compact
+  // for object payloads, so it never fits in the cap on its own — but giving
+  // the truncated text line breaks makes any client-side disk spill readable.
   if (text.length > MAX_TOOL_OUTPUT) {
-    text = text.slice(0, MAX_TOOL_OUTPUT) + "\n... [Output truncated]";
+    text = JSON.stringify(output, null, 2).slice(0, MAX_TOOL_OUTPUT) + "\n... [Output truncated]";
   }
 
   return { content: [{ type: "text", text }] };

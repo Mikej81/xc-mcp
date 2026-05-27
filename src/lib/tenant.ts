@@ -176,6 +176,14 @@ export function resolveTenant(
     return tenants[0];
   }
 
+  const defaultTenantName = process.env.XC_DEFAULT_TENANT;
+  if (defaultTenantName !== undefined && defaultTenantName !== "") {
+    const match = tenants.find((t) => t.name === defaultTenantName.toLowerCase());
+    if (match) return match;
+    const available = tenants.map((t) => t.name).join(", ");
+    return `XC_DEFAULT_TENANT="${defaultTenantName}" but that tenant is not configured. Available: ${available}`;
+  }
+
   const available = tenants.map((t) => `${t.name} (${t.tenantUrl})`).join(", ");
   return `Multiple tenants configured. Specify the "tenant" parameter. Available: ${available}`;
 }

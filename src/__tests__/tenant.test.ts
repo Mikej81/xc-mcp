@@ -242,6 +242,63 @@ describe("parseTenantEnvVars", () => {
   });
 });
 
+describe("resolveTenant with XC_DEFAULT_TENANT", () => {
+  const originalEnv = process.env.XC_DEFAULT_TENANT;
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.XC_DEFAULT_TENANT;
+    else process.env.XC_DEFAULT_TENANT = originalEnv;
+  });
+
+  function makeTenants(names: string[]): TenantConfig[] {
+    return names.map((n) => ({
+      name: n,
+      apiToken: "tok",
+      tenantUrl: `https://${n}.console.ves.volterra.io`,
+    }));
+  }
+
+  it("falls back to XC_DEFAULT_TENANT when no tenant is requested and multiple are configured", () => {
+    process.env.XC_DEFAULT_TENANT = "prod";
+    const tenants = makeTenants(["prod", "staging"]);
+    const tenant = resolveTenant(tenants);
+    expect(typeof tenant).toBe("object");
+    expect((tenant as { name: string }).name).toBe("prod");
+  });
+
+  it("matches XC_DEFAULT_TENANT case-insensitively", () => {
+    process.env.XC_DEFAULT_TENANT = "PROD";
+    const tenants = makeTenants(["prod", "staging"]);
+    const tenant = resolveTenant(tenants);
+    expect(typeof tenant).toBe("object");
+    expect((tenant as { name: string }).name).toBe("prod");
+  });
+
+  it("still errors when XC_DEFAULT_TENANT names a tenant that is not configured", () => {
+    process.env.XC_DEFAULT_TENANT = "nonexistent";
+    const tenants = makeTenants(["prod", "staging"]);
+    const result = resolveTenant(tenants);
+    expect(typeof result).toBe("string");
+    expect(result).toContain("XC_DEFAULT_TENANT");
+    expect(result).toContain("nonexistent");
+  });
+
+  it("explicit tenant parameter still overrides XC_DEFAULT_TENANT", () => {
+    process.env.XC_DEFAULT_TENANT = "prod";
+    const tenants = makeTenants(["prod", "staging"]);
+    const tenant = resolveTenant(tenants, "staging");
+    expect((tenant as { name: string }).name).toBe("staging");
+  });
+
+  it("with no XC_DEFAULT_TENANT and multiple tenants, still returns the existing error", () => {
+    delete process.env.XC_DEFAULT_TENANT;
+    const tenants = makeTenants(["prod", "staging"]);
+    const result = resolveTenant(tenants);
+    expect(typeof result).toBe("string");
+    expect(result).toContain("Multiple tenants configured");
+  });
+});
+
 describe("resolveNamespace", () => {
   const tenant: TenantConfig = {
     name: "test",

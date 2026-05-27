@@ -4,20 +4,27 @@ An [MCP](https://modelcontextprotocol.io/) server that gives AI assistants acces
 
 ## How It Works
 
-Instead of registering thousands of individual tools, the server exposes 11 tools that let an AI discover, explore, and call any F5 XC API endpoint. For common resources like load balancers and origin pools, the AI can skip discovery entirely and use built-in templates. For multi-step state mutations, dedicated patch and diff tools handle the GET, strip, and PUT round-trip so callers do not have to.
+Instead of registering thousands of individual tools, the server exposes 18 tools that let an AI discover, explore, and call any F5 XC API endpoint. For common resources like load balancers and origin pools, the AI can skip discovery entirely and use built-in templates. For multi-step state mutations, dedicated patch, diff, and convenience tools handle the GET, strip, and PUT round-trip so callers do not have to.
 
 | Tool | Purpose |
 |------|---------|
 | `xc_discover_apis` | Search API operations by keyword, category, or HTTP method |
 | `xc_get_operation_details` | Get request body templates or full schemas for an operation |
+| `xc_resolve_schema_ref` | Expand a JSON Schema `$ref` from an OpenAPI spec file to a configurable depth |
 | `xc_call_api` | Execute any API call with optional response filtering |
 | `xc_create_cert` | Generate a self-signed cert with blindfold-encrypted private key |
 | `xc_patch_resource` | Apply JSON-Patch ops to a resource, handling the GET, strip, and PUT round-trip |
 | `xc_diff_resource` | Show what a PUT would change as a JSON-Patch diff, without applying anything |
 | `xc_lb_wait_ready` | Poll an HTTP LB until its certificate state becomes valid or a timeout elapses |
+| `xc_lb_set_request_headers` | Add or remove request headers on an HTTP LB, handling the GET, strip, and PUT round-trip |
+| `xc_pool_attach_healthcheck` | Attach a named healthcheck to an origin pool (idempotent) |
+| `xc_pool_detach_healthcheck` | Detach a named healthcheck from an origin pool |
+| `xc_dns_zone_status` | DNS zone diagnostic roll-up: deployment status, nameservers, and an optional data-plane probe |
 | `xc_query_access_logs` | Query access logs with parsing, auto-pagination, and optional group-by aggregation |
+| `xc_query_lb_metrics` | Time-bucketed request counts and response-code-class breakdown for an HTTP LB |
 | `xc_list_namespaces` | List namespaces with optional prefix filtering |
-| `xc_list_resources` | List resources with field projection and item limits |
+| `xc_list_resources` | List resources with field projection and item limits, plus an optional `verify` flag that drops names that 404 on a follow-up GET |
+| `xc_search_resources` | Find resources by name across multiple namespaces, with substring or glob matching |
 | `xc_list_tenants` | Show configured tenants, version, and update availability |
 
 The server also exposes [MCP resources](#mcp-resources) for browsing API categories and resource types, and [MCP prompts](#mcp-prompts) for common workflows like auditing a namespace or deploying a load balancer.
@@ -192,6 +199,8 @@ XC_TENANT_DEV_TOKEN=your-dev-api-token
 
 The naming convention is `XC_TENANT_<NAME>_URL` and `XC_TENANT_<NAME>_TOKEN`. When only one tenant is configured, the `tenant` parameter is optional. With multiple tenants, you'll need to specify which one on each call.
 
+For multi-tenant deployments where most operations target one tenant, set `XC_DEFAULT_TENANT=prod` (or another configured name) so callers can omit the `tenant` parameter for that tenant. This mirrors the existing `XC_DEFAULT_NAMESPACE` behavior.
+
 ```bash
 claude mcp add-json f5-xc --scope user '{"type":"stdio","command":"docker","args":["run","--rm","-i","-e","XC_TENANT_PROD_URL","-e","XC_TENANT_PROD_TOKEN","-e","XC_TENANT_DEV_URL","-e","XC_TENANT_DEV_TOKEN","ghcr.io/mikej81/xc-mcp:latest"],"env":{"XC_TENANT_PROD_URL":"https://prod.console.ves.volterra.io","XC_TENANT_PROD_TOKEN":"abc123","XC_TENANT_DEV_URL":"https://dev.console.ves.volterra.io","XC_TENANT_DEV_TOKEN":"def456"}}'
 ```
@@ -247,6 +256,7 @@ The MCP SDK marks every tool with `execution.taskSupport: "forbidden"` per the T
 | `XC_TENANT_<NAME>_P12_PASSWORD` | Yes* | -- | Passphrase for `_P12_PATH`. Required when `_P12_PATH` is set. |
 | `XC_DEFAULT_NAMESPACE` | No | -- | Default namespace (single-tenant mode) |
 | `XC_TENANT_<NAME>_DEFAULT_NAMESPACE` | No | -- | Default namespace (multi-tenant mode) |
+| `XC_DEFAULT_TENANT` | No | -- | Name of the tenant to use when `tenant` is omitted and multiple tenants are configured. Must match one of the `XC_TENANT_<NAME>_URL` names (case-insensitive). |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
 | `MCP_AUTH_HEADER_NAME` | No* | -- | Name of the auth header required on every `/mcp` HTTP request (e.g. `X-API-Key`). Optional but strongly recommended for any public deployment. |
@@ -345,7 +355,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 228 unit tests
+npm test                 # Run 317 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 
@@ -370,7 +380,7 @@ npx tsx scripts/smoke-test.ts <namespace> <lb_name> --tenant prod
 
 At build time, 268 OpenAPI spec files are parsed into a searchable index with O(1) operation lookup. At runtime, schemas are resolved on demand from the original spec files with configurable depth and optional summarization. Common resource types return pre-built templates instead of full schemas.
 
-All API calls go through a shared HTTP client that handles auth headers, request timeouts (30s), and response truncation (50KB for `xc_call_api`, unlimited for list tools that do their own extraction). Private keys are always blindfold-encrypted using the tenant's RSA public key before transmission.
+All API calls go through a shared HTTP client that handles auth headers, request timeouts (30s), and response truncation (50KB for `xc_call_api`, unlimited for list tools that do their own extraction). Non-2xx responses carry an `error_category` field (`auth_failure`, `permission_denied`, `not_found`, `timeout`, `config_conflict`, `rate_limited`, `validation_error`, `backend_unavailable`, `server_error`) so callers can branch on the category without parsing the body. Private keys are always blindfold-encrypted using the tenant's RSA public key before transmission.
 
 The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user with a health check.
 

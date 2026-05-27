@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleListResources } from "../tools/list-resources.js";
 import { resolveNamespace } from "../lib/tenant.js";
 import type { TenantConfig } from "../types/index.js";
@@ -23,6 +23,10 @@ const configWithDefault: TenantConfig = {
 };
 
 describe("handleListResources", () => {
+  beforeEach(() => {
+    mockCallApi.mockReset();
+  });
+
   it("returns resource list for 200 with items", async () => {
     mockCallApi.mockResolvedValue({
       status: 200,
@@ -274,6 +278,64 @@ describe("handleListResources", () => {
 
     const text = result.content[0].text;
     expect(text).toContain("Example path: /api/config/namespaces/default/http_loadbalancers/{name}");
+  });
+
+  it("with verify=true, drops items that 404 on individual GET", async () => {
+    // First call: the list itself.
+    mockCallApi.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "ok-lb" }, { name: "missing-lb" }] },
+    });
+    // Subsequent GETs (one per item, in order).
+    mockCallApi.mockResolvedValueOnce({ status: 200, statusText: "OK", headers: {}, body: { name: "ok-lb" } });
+    mockCallApi.mockResolvedValueOnce({ status: 404, statusText: "Not Found", headers: {}, body: {} });
+
+    const result = await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+      verify: true,
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain("ok-lb");
+    expect(text).not.toContain("missing-lb");
+    expect(text).toContain("1 verified");
+  });
+
+  it("with verify=true and zero items surviving, returns a clear message", async () => {
+    mockCallApi.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "missing-lb" }] },
+    });
+    mockCallApi.mockResolvedValueOnce({ status: 404, statusText: "Not Found", headers: {}, body: {} });
+
+    const result = await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+      verify: true,
+    });
+
+    expect(result.content[0].text).toContain("0 verified");
+  });
+
+  it("without verify, behavior is unchanged (single list call)", async () => {
+    mockCallApi.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }] },
+    });
+
+    await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+    });
+
+    expect(mockCallApi).toHaveBeenCalledTimes(1);
   });
 });
 

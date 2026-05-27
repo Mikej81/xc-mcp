@@ -1,5 +1,6 @@
 import type { ApiResponse, TenantConfig } from "../types/index.js";
 import { MAX_RESPONSE_SIZE, REQUEST_TIMEOUT_MS } from "./constants.js";
+import { classifyError } from "./error-classifier.js";
 
 /**
  * Substitute path parameters into a URL path template.
@@ -109,12 +110,14 @@ export async function callApi(
       }
     }
 
+    const errorCategory = classifyError(response.status, response.statusText, responseBody);
     return {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders,
       body: responseBody,
       truncated,
+      ...(errorCategory ? { error_category: errorCategory } : {}),
     };
   } catch (error: unknown) {
     if (error instanceof Error) {
@@ -124,6 +127,7 @@ export async function callApi(
           statusText: "Request Timeout",
           headers: {},
           body: { error: `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s` },
+          error_category: "timeout" as const,
         };
       }
       return {
@@ -131,6 +135,7 @@ export async function callApi(
         statusText: "Network Error",
         headers: {},
         body: { error: error.message },
+        error_category: "backend_unavailable" as const,
       };
     }
     return {
@@ -138,6 +143,7 @@ export async function callApi(
       statusText: "Unknown Error",
       headers: {},
       body: { error: String(error) },
+      error_category: "backend_unavailable" as const,
     };
   } finally {
     clearTimeout(timeout);

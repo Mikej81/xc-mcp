@@ -21,7 +21,7 @@ function loadSpec(specsDir: string, specFile: string): any {
  * Resolve a $ref pointer within a spec.
  * Handles local refs like "#/components/schemas/FooBar"
  */
-function resolveRef(spec: any, ref: string): any {
+export function resolveRef(spec: any, ref: string): any {
   if (!ref.startsWith("#/")) return { $ref: ref };
   const parts = ref.slice(2).split("/");
   let current = spec;

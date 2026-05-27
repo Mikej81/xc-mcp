@@ -281,6 +281,34 @@ describe("handleCallApi", () => {
     expect(parsed.filtered).toBeUndefined();
     expect(parsed.body).toEqual({ items: [{ name: "lb1" }], metadata: { total: 1 } });
   });
+
+  it("pretty-prints and truncates output that exceeds the size cap", async () => {
+    const big = "x".repeat(70_000);
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1", giant: big }] },
+    });
+
+    const result = await handleCallApi(config, { method: "GET", path: "/api/test" });
+    const text = result.content[0].text;
+    expect(text).toContain("\n  ");
+    expect(text).toContain("[Output truncated]");
+  });
+
+  it("uses compact output for small responses", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }] },
+    });
+
+    const result = await handleCallApi(config, { method: "GET", path: "/api/test" });
+    const text = result.content[0].text;
+    expect(text).not.toContain("\n  ");
+  });
 });
 
 describe("filterResponse", () => {

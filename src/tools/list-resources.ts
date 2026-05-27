@@ -71,20 +71,33 @@ export async function handleListResources(
     items = items.slice(0, params.max_items);
   }
 
-  if (totalCount === 0) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `No ${params.resource_type} found in namespace "${params.namespace}".`,
-        },
-      ],
-    };
+  let verifiedCount: number | undefined;
+  if (params.verify) {
+    const surviving: any[] = [];
+    for (const item of items) {
+      const name = item.name || item.metadata?.name;
+      if (!name) continue;
+      const probePath = `${path}/${encodeURIComponent(name)}`;
+      const probe = await callApi(config, "GET", probePath, { skipTruncation: true });
+      if (probe.status >= 200 && probe.status < 300) {
+        surviving.push(item);
+      }
+    }
+    items = surviving;
+    verifiedCount = items.length;
   }
 
+  if (items.length === 0) {
+    const detail = verifiedCount !== undefined
+      ? `0 verified ${params.resource_type} in namespace "${params.namespace}" (the list returned ${totalCount} but none responded to a GET).`
+      : `No ${params.resource_type} found in namespace "${params.namespace}".`;
+    return { content: [{ type: "text", text: detail }] };
+  }
+
+  const verifyNote = verifiedCount !== undefined ? ` (${verifiedCount} verified)` : "";
   const truncatedNote = items.length < totalCount ? ` (showing ${items.length} of ${totalCount})` : "";
   const lines = [
-    `Found ${totalCount} ${params.resource_type} in namespace "${params.namespace}"${truncatedNote}:\n`,
+    `Found ${totalCount} ${params.resource_type} in namespace "${params.namespace}"${truncatedNote}${verifyNote}:\n`,
   ];
 
   // If fields are specified, use field projection; otherwise use default summary

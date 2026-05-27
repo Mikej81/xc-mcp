@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 -- 2026-05-27
+
+### New tools, ergonomics, and error classification
+
+Adds six new MCP tools, three ergonomics improvements, and an error-classification layer for upstream failures. No breaking changes.
+
+- **New `xc_search_resources` tool** -- finds resources by name across multiple namespaces in one call. Substring or glob name matching, optional label selector, optional namespace allow-list, and an auto-discovery fallback that lists every namespace visible to the tenant.
+- **New `xc_dns_zone_status` tool** -- diagnostic roll-up for a DNS zone: deployment_status, assigned nameservers, the Operational condition, and an optional `local_zone_file` data-plane probe. Explicitly flags `control_plane_active_but_data_plane_unreachable` when those two disagree.
+- **New `xc_lb_set_request_headers` tool** -- convenience wrapper that adds/removes entries in an HTTP LB's `spec.add_request_headers` via a single GET/strip/PUT cycle. Replaces (does not duplicate) entries whose names match case-insensitively. Preserves `resource_version` optimistic concurrency by default.
+- **New `xc_pool_attach_healthcheck` / `xc_pool_detach_healthcheck` tools** -- attach or detach a named healthcheck from an origin_pool's `spec.healthcheck` list. Attach is idempotent. Detach removes by name.
+- **New `xc_resolve_schema_ref` tool** -- expands a JSON Schema `$ref` from a named OpenAPI spec file. Useful when `xc_get_operation_details` truncated a deeply nested type and a caller needs just that component without re-traversing the whole operation. Configurable depth cap, default 8.
+- **New `xc_query_lb_metrics` tool** -- per-LB time-bucketed request counts and response-code-class breakdown, derived from access logs (XC does not expose a dedicated HTTP LB metrics endpoint in the bundled specs). Buckets: `1m` / `5m` / `15m` / `1h`. Auto-paginates over `scroll_id` up to 10 pages.
+- **`XC_DEFAULT_TENANT` env var** -- mirrors `XC_DEFAULT_NAMESPACE` for multi-tenant deployments. When multiple tenants are configured and the caller omits `tenant`, falls back to the named default (case-insensitive). An unknown name surfaces a specific error referencing the env var rather than the generic "Multiple tenants configured" message.
+- **Pretty-print large outputs** -- `xc_call_api` now pretty-prints (2-space indent) responses that exceed the 60KB tool-output cap, so client-side spills to disk have normal line breaks. Small responses stay compact for token efficiency.
+- **Optional `verify` flag on `xc_list_resources`** -- when set, the tool issues a GET against every returned name and filters out any that 404, defending against list/get cache-coherence drift. The response header reports both the listed count and the verified count.
+- **Error classification** -- `ApiResponse` now carries an optional `error_category` field populated by a pure classifier in `src/lib/error-classifier.ts`. Categories: `auth_failure`, `permission_denied`, `not_found`, `timeout`, `config_conflict`, `rate_limited`, `validation_error`, `backend_unavailable`, `server_error`. 503 responses and 5xx bodies containing gRPC dial strings are bucketed as `backend_unavailable` so callers can branch on the field instead of regexing the body. Network errors and request timeouts on the client side also surface the category.
+- **Tool count** -- 18 (up from 11).
+- **Unit tests** -- 317 tests across 32 test files (up from 263/25).
+- No protocol or schema changes beyond the new tool registrations. No removed tools. No breaking changes. Drop-in upgrade from 0.4.3.
+
 ## 0.4.3 -- 2026-05-27
 
 ### Bug fixes for generic API tool, response filtering, and DNS listing

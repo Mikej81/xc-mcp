@@ -176,4 +176,27 @@ describe("callApi", () => {
       expect(sentBody).toBe(JSON.stringify(input));
     }
   });
+
+  it("attaches error_category=backend_unavailable for 503 with gRPC dial string", async () => {
+    mockFetch({
+      status: 503, statusText: "Service Unavailable",
+      text: '{"error":"From server powerdns-config.tenant.int.f5fed.com:50552 connection error"}',
+    });
+    const result = await callApi(config, "GET", "/api/test");
+    expect(result.status).toBe(503);
+    expect(result.error_category).toBe("backend_unavailable");
+  });
+
+  it("attaches error_category=timeout on AbortError", async () => {
+    const abortError = new Error("aborted"); abortError.name = "AbortError";
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(abortError);
+    const result = await callApi(config, "GET", "/api/test");
+    expect(result.error_category).toBe("timeout");
+  });
+
+  it("does not set error_category on 2xx", async () => {
+    mockFetch({ text: '{"items":[]}' });
+    const result = await callApi(config, "GET", "/api/test");
+    expect(result.error_category).toBeUndefined();
+  });
 });

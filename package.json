@@ -1,6 +1,6 @@
 {
   "name": "f5-xc-mcp-server",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "MCP Server for F5 Distributed Cloud (XC) API",
   "type": "module",
   "main": "dist/src/index.js",
