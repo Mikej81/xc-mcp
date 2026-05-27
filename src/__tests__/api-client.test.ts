@@ -159,4 +159,20 @@ describe("callApi", () => {
     const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
     expect(sentBody).toBe('"hello"');
   });
+
+  it("passes a JSON-array string body through without re-encoding", async () => {
+    mockFetch({});
+    await callApi(config, "POST", "/api/test", { body: "[1,2,3]" });
+    const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+    expect(sentBody).toBe("[1,2,3]");
+  });
+
+  it("encodes JSON-primitive strings (numbers, booleans, null) as JSON strings", async () => {
+    for (const input of ["42", "true", "null"]) {
+      mockFetch({});
+      await callApi(config, "POST", "/api/test", { body: input });
+      const sentBody = (fetch as ReturnType<typeof vi.fn>).mock.calls[(fetch as ReturnType<typeof vi.fn>).mock.calls.length - 1][1].body;
+      expect(sentBody).toBe(JSON.stringify(input));
+    }
+  });
 });

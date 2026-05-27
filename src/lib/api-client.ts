@@ -62,8 +62,12 @@ export async function callApi(
     serializedBody = undefined;
   } else if (typeof body === "string") {
     try {
-      JSON.parse(body);
-      serializedBody = body;
+      const parsed = JSON.parse(body);
+      if (parsed !== null && typeof parsed === "object") {
+        serializedBody = body;
+      } else {
+        serializedBody = JSON.stringify(body);
+      }
     } catch {
       serializedBody = JSON.stringify(body);
     }
