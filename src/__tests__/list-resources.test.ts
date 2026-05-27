@@ -240,6 +240,41 @@ describe("handleListResources", () => {
       expect.anything(),
     );
   });
+
+  it("includes the DNS-routed example path in the response footer for DNS types", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "example.com" }] },
+    });
+
+    const result = await handleListResources(config, {
+      namespace: "system",
+      resource_type: "dns_zones",
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain("Example path: /api/config/dns/namespaces/system/dns_zones/{name}");
+    expect(text).not.toContain("Example path: /api/config/namespaces/system/dns_zones");
+  });
+
+  it("includes the default example path in the response footer for non-DNS types", async () => {
+    mockCallApi.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      body: { items: [{ name: "lb1" }] },
+    });
+
+    const result = await handleListResources(config, {
+      namespace: "default",
+      resource_type: "http_loadbalancers",
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain("Example path: /api/config/namespaces/default/http_loadbalancers/{name}");
+  });
 });
 
 describe("namespace resolution with handleListResources", () => {

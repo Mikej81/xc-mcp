@@ -113,7 +113,7 @@ export async function handleListResources(
 
   lines.push(
     `\nUse xc_call_api with GET and the resource name to get details.`,
-    `Example path: /api/config/namespaces/${params.namespace}/${params.resource_type}/{name}`,
+    `Example path: ${path}/{name}`,
   );
 
   return { content: [{ type: "text", text: lines.join("\n") }] };
