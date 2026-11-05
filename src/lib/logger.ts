@@ -25,6 +25,18 @@ export function log(
   fields?: Record<string, unknown>,
 ): void {
   if (LEVEL_ORDER[level] < LEVEL_ORDER[readConfiguredLevel()]) return;
+  write(level, evt, fields);
+}
+
+/**
+ * Write one `audit` line at level "info", ignoring MCP_LOG_LEVEL.
+ * Audit lines are always on; filter on evt=audit downstream to drop them.
+ */
+export function logAudit(fields: Record<string, unknown>): void {
+  write("info", "audit", fields);
+}
+
+function write(level: LogLevel, evt: string, fields?: Record<string, unknown>): void {
   const base = { ts: new Date().toISOString(), level, evt };
   let serialized: string;
   try {

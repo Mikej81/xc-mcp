@@ -15,6 +15,7 @@ import { log } from "./lib/logger.js";
 import { createMcpServer } from "./server.js";
 import { startHttp } from "./http.js";
 import { parseReadOnlyEnv } from "./lib/tool-policy.js";
+import { buildInfo } from "./lib/metrics.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -53,6 +54,17 @@ function parseDrainSeconds(value: string | undefined): number {
   return Number(v);
 }
 
+/** Parse MCP_METRICS_PORT: an integer 1-65535, or unset (undefined). */
+function parseMetricsPort(value: string | undefined): number | undefined {
+  const v = (value ?? "").trim();
+  if (v === "") return undefined;
+  const n = Number(v);
+  if (!/^\d+$/.test(v) || n < 1 || n > 65535) {
+    throw new Error("MCP_METRICS_PORT must be an integer between 1 and 65535");
+  }
+  return n;
+}
+
 export function buildServerConfig(
   env: NodeJS.ProcessEnv,
   paths: { specsDir: string; indexPath: string },
@@ -60,6 +72,13 @@ export function buildServerConfig(
   const mode = (env.MCP_MODE ?? "").trim().toLowerCase();
   const readOnly = parseReadOnlyEnv(env.MCP_READ_ONLY);
   const shutdownDrainMs = parseDrainSeconds(env.MCP_SHUTDOWN_DRAIN_SECONDS) * 1000;
+  const metricsPort = parseMetricsPort(env.MCP_METRICS_PORT);
+  // Same default and parsing as startHttp.
+  const httpPort = parseInt(env.MCP_HTTP_PORT || "3000", 10);
+  if (metricsPort !== undefined && env.MCP_TRANSPORT?.toLowerCase() === "http" && metricsPort === httpPort) {
+    throw new Error(`MCP_METRICS_PORT must differ from MCP_HTTP_PORT (both ${metricsPort})`);
+  }
+  const metrics = metricsPort !== undefined ? { metricsPort } : {};
   if (mode !== "" && mode !== "local" && mode !== "hosted") {
     throw new Error(`MCP_MODE must be "hosted" or "local" (or unset), got "${env.MCP_MODE}"`);
   }
@@ -78,6 +97,7 @@ export function buildServerConfig(
       mode: "hosted",
       readOnly,
       shutdownDrainMs,
+      ...metrics,
       tenants: [],
       hosted: parseHostedConfig(env),
       specsDir: paths.specsDir,
@@ -106,6 +126,7 @@ export function buildServerConfig(
     mode: "local",
     readOnly,
     shutdownDrainMs,
+    ...metrics,
   };
 }
 
@@ -151,6 +172,7 @@ async function main() {
   }
 
   console.error(`F5 XC MCP Server v${VERSION} starting...`);
+  buildInfo.set(1, { version: VERSION, mode: config.mode });
   const hosted = config.mode === "hosted";
   log("info", "startup", {
     version: VERSION,
@@ -183,6 +205,9 @@ async function main() {
   if (transport === "http") {
     await startHttp(config, index, authConfig);
   } else {
+    if (config.metricsPort !== undefined) {
+      log("warn", "metrics_disabled_stdio", { port: config.metricsPort });
+    }
     await startStdio(config, index);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { log } from "../lib/logger.js";
+import { log, logAudit } from "../lib/logger.js";
 
 describe("logger", () => {
   let writeSpy: ReturnType<typeof vi.spyOn>;
@@ -28,6 +28,15 @@ describe("logger", () => {
     expect(parsed.duration_ms).toBe(47);
     expect(typeof parsed.ts).toBe("string");
     expect(parsed.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("logAudit writes an info-level audit line even at MCP_LOG_LEVEL=error", () => {
+    process.env.MCP_LOG_LEVEL = "error";
+    logAudit({ tool: "xc_call_api", method: "POST" });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse((writeSpy.mock.calls[0][0] as string).trimEnd());
+    expect(parsed).toMatchObject({ level: "info", evt: "audit", tool: "xc_call_api", method: "POST" });
+    expect(typeof parsed.ts).toBe("string");
   });
 
   it("drops lines below the configured level", () => {

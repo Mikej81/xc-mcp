@@ -34,7 +34,7 @@ The server also exposes [MCP resources](#mcp-resources) for browsing API categor
 The biggest challenge with API-heavy MCP tools is context bloat. Every response the AI sees costs tokens. This server tackles that at multiple levels:
 
 - **Templates instead of schemas.** When you ask for the create schema of an HTTP LB, origin pool, WAF, or cert, the server returns a compact working example (~50 lines) instead of the full OpenAPI schema (~630 lines). That's 85% fewer tokens. Pass `include_full_schema: true` if you need the real thing.
-- **Server-side cert generation.** `xc_create_cert` generates the cert, blindfold-encrypts the private key, and creates the XC object without any PEM content ever entering the conversation.
+- **Server-side cert generation.** `xc_create_cert` generates the cert, blindfold-encrypts the private key, and creates the XC object without any PEM content ever entering the conversation. The `domain` argument must be a DNS hostname, optionally starting with `*.` for a wildcard, up to 253 characters. The server runs `openssl` to make the key pair, so a container image needs the `openssl` binary (the published image includes it) and a writable `/tmp`.
 - **Response filtering.** `response_filter` on `xc_call_api` extracts specific fields from large API responses before they reach the AI. Useful for quota endpoints that return 50KB+.
 - **Smart defaults.** The server automatically sets `port: 443` and `non_default_loadbalancer` on HTTPS LB creates so the AI doesn't need to look up those requirements.
 - **Compact output.** All JSON is serialized without whitespace. Tool descriptions are intentionally terse. Discovery output is one line per operation.
@@ -352,6 +352,8 @@ readinessProbe:
   httpGet: { path: /readyz, port: 3000 }
 ```
 
+A complete Deployment, Service and Ingress with these probes and timings is in [`deploy/k8s/`](deploy/k8s/).
+
 The Docker image's `HEALTHCHECK` calls `/healthz` when `MCP_TRANSPORT=http`. In stdio mode there is no port to probe, so it reports healthy while the process runs.
 
 ### Client compatibility (MCP Tasks RFC)
@@ -452,8 +454,17 @@ If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each co
 - `xc_call_api` rejects any path that resolves outside the tenant origin, such as an absolute URL. This check applies in local mode too.
 - `xc_resolve_schema_ref` rejects any `spec_file` that resolves outside the specs directory, such as one containing `../`. This check applies in local mode too.
 
+### Expired tokens
+
+XC API tokens expire. When XC answers 401 during a tool call, the server appends one extra text block to that tool's result:
+
+> XC rejected the API token (401). It may have expired or been revoked. Update X-XC-Tenant-Token in your MCP client config, then reconnect: the current session stays bound to the old token.
+
+The original result stays as it was. A 403 is a permission problem, so it gets no hint. In local mode the hint names the setting to change instead: `XC_API_TOKEN` for a single tenant, `XC_TENANT_<NAME>_TOKEN` for a named tenant, or "Renew the P12 certificate" for a P12 tenant, followed by "then restart the server". The hint never contains the token.
+
 ### Operator notes
 
+- A ready-made Kubernetes setup (Deployment, Service, Ingress, metrics port) lives in [`deploy/k8s/`](deploy/k8s/).
 - Run it behind TLS. The token travels in a header on every request.
 - Rate-limit at the proxy. The server does not throttle requests.
 - It runs as a single process. Sessions live in memory, so scaling out needs sticky routing on `Mcp-Session-Id`.
@@ -464,6 +475,44 @@ If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each co
 - Access logs carry the tenant hostname. They never carry tokens. Request-body logging at `MCP_LOG_LEVEL=debug` is suppressed in hosted mode, because tool arguments can hold secrets.
 
 ---
+
+## Metrics
+
+Set `MCP_METRICS_PORT` to serve Prometheus metrics (text format 0.0.4) from a second HTTP listener on that port, for example `MCP_METRICS_PORT=9090`. Only `GET /metrics` answers; other paths get 404 and other methods get 405. The MCP port never serves `/metrics`. Metrics are off when the variable is unset. They need `MCP_TRANSPORT=http`: with stdio the server logs `metrics_disabled_stdio` and starts no listener. The port must be an integer from 1 to 65535 and differ from `MCP_HTTP_PORT`, or the server refuses to start. It also refuses to start if it cannot bind the port.
+
+The listener binds all interfaces and has no authentication. Keep it off the public path: do not route it through a public load balancer or Ingress, and publish it only to a network your Prometheus can reach. In Docker, map it to localhost (`-p 127.0.0.1:9090:9090`). On Kubernetes, expose it on a ClusterIP Service only, as `deploy/k8s/` does, and consider a NetworkPolicy to limit who can reach it. The listener keeps answering during the shutdown drain and closes with the sessions.
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `xc_mcp_build_info` | gauge | `version`, `mode` |
+| `xc_mcp_sessions_active` | gauge | none |
+| `xc_mcp_sessions_created_total` | counter | none |
+| `xc_mcp_session_refusals_total` | counter | `reason`: `per_credential_cap`, `global_cap`, `shutting_down` |
+| `xc_mcp_session_evictions_total` | counter | `reason`: `per_credential_cap`, `global_cap`, `idle` |
+| `xc_mcp_auth_failures_total` | counter | `reason`: `missing_tenant_url`, `missing_token`, `invalid_tenant_url`, `url_not_allowed`, `duplicate_header`, `invalid_credentials`, `tenant_unreachable`, `session_credential_mismatch`, `auth_header_missing`, `auth_header_mismatch` |
+| `xc_mcp_tool_calls_total` | counter | `tool`, `outcome` (`ok` or `error`) |
+| `xc_mcp_upstream_requests_total` | counter | `tool`, `method`, `status_class` (`2xx`, `3xx`, `4xx`, `5xx`, `network`, `timeout`) |
+| `xc_mcp_upstream_request_duration_seconds` | histogram | `tool`, `method` |
+
+The histogram buckets are 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 and 30 seconds. `tool` is `none` for XC requests made outside a tool call, such as the `whoami` credential check on initialize. Labels come from fixed sets only. No tenant, path, namespace or user appears in any label.
+
+## Audit Log
+
+Every write the server sends to XC leaves one structured log line on stderr with `evt` set to `audit`. A write is any non-`GET` request made by a tool that changes state, so `xc_patch_resource`, `xc_call_api` with `POST`, `PUT`, `PATCH` or `DELETE`, and the other writing tools are covered. Tools that only read are not audited, including `xc_query_access_logs` and `xc_query_lb_metrics`, which use `POST` to read. Failed writes are audited too. Audit lines are always on and need no setting. `MCP_LOG_LEVEL` does not suppress them: they are written at level `info` even when the level is `warn` or `error`. To drop them, filter on `evt=audit` downstream. A `POST` to `/api/web/namespaces/<ns>/cascade_delete` is logged with `resource_type` `namespaces`, `name` set to the namespace and `action` set to `cascade_delete`.
+
+| Field | Value |
+|-------|-------|
+| `tool` | The tool that made the request. |
+| `method` | `POST`, `PUT`, `PATCH` or `DELETE`. |
+| `path` | The request path after parameter substitution, without the query string. |
+| `namespace`, `resource_type`, `name` | Parsed from `/api/<group>/namespaces/<ns>/<type>[/<name>]` when the path matches. Left out otherwise. |
+| `status` | The upstream HTTP status. 0 for a network error, 408 for a timeout. |
+| `duration_ms` | Request time in milliseconds. |
+| `session_id` | The first 8 characters of the MCP session id, when there is a session. |
+| `caller_id` | Who made the call. In hosted mode, the first 8 hex characters of the SHA-256 fingerprint of the tenant URL and token, which tells users apart without revealing the token. In local mode, the configured tenant name. |
+| `tenant_host` | The tenant hostname. |
+
+The line never contains request or response bodies, query strings, headers or tokens.
 
 ## Environment Variables
 
@@ -483,6 +532,7 @@ If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each co
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
 | `MCP_SHUTDOWN_DRAIN_SECONDS` | No | `0` | HTTP only. Seconds to report not-ready on `/readyz` after `SIGTERM` before the server stops accepting connections. See [Health checks and shutdown](#health-checks-and-shutdown). |
+| `MCP_METRICS_PORT` | No | -- | HTTP transport only. Port (1-65535) for the Prometheus `/metrics` listener. Must differ from `MCP_HTTP_PORT`. With stdio the server logs a warning and ignores it. See [Metrics](#metrics). |
 | `MCP_READ_ONLY` | No | `false` | `true` hides the tools that write and limits `xc_call_api` to `GET`. See [Read-Only Mode](#read-only-mode). |
 | `MCP_MODE` | No | `local` | Set to `hosted` for [Hosted Mode](#hosted-mode). Requires `MCP_TRANSPORT=http` and no tenant variables. |
 | `XC_HOSTED_ALLOWED_DOMAINS` | No | `.console.ves.volterra.io` | Hosted mode only. Comma-separated tenant domain suffixes. |
@@ -585,7 +635,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 441 unit tests
+npm test                 # Run 516 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 

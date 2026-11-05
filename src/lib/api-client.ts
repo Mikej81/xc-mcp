@@ -1,6 +1,19 @@
 import type { ApiResponse, TenantConfig } from "../types/index.js";
 import { MAX_RESPONSE_SIZE, REQUEST_TIMEOUT_MS } from "./constants.js";
 import { classifyError } from "./error-classifier.js";
+import { currentCallContext } from "./call-context.js";
+import { auditWrite } from "./audit.js";
+import { statusClass, upstreamDuration, upstreamRequests } from "./metrics.js";
+
+const METHOD_LABELS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
+
+/** Count one upstream request. Labels come from fixed sets only (no tenant or path). */
+function recordUpstream(method: string, status: number, seconds: number): void {
+  const tool = currentCallContext()?.tool ?? "none";
+  const m = METHOD_LABELS.has(method) ? method : "OTHER";
+  upstreamRequests.inc({ tool, method: m, status_class: statusClass(status) });
+  upstreamDuration.observe(seconds, { tool, method: m });
+}
 
 /**
  * Substitute path parameters into a URL path template.
@@ -87,9 +100,12 @@ export async function callApi(
     serializedBody = JSON.stringify(body);
   }
 
+  const upperMethod = method.toUpperCase();
+  const started = performance.now();
+  let result: ApiResponse;
   try {
     const response = await fetch(url.toString(), {
-      method: method.toUpperCase(),
+      method: upperMethod,
       headers,
       body: serializedBody,
       signal: controller.signal,
@@ -122,8 +138,12 @@ export async function callApi(
       }
     }
 
+    if (response.status === 401) {
+      const ctx = currentCallContext();
+      if (ctx) ctx.sawAuthFailure = true;
+    }
     const errorCategory = classifyError(response.status, response.statusText, responseBody);
-    return {
+    result = {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders,
@@ -134,30 +154,36 @@ export async function callApi(
   } catch (error: unknown) {
     if (error instanceof Error) {
       if (error.name === "AbortError") {
-        return {
+        result = {
           status: 408,
           statusText: "Request Timeout",
           headers: {},
           body: { error: `Request timed out after ${timeoutMs / 1000}s` },
           error_category: "timeout" as const,
         };
+      } else {
+        result = {
+          status: 0,
+          statusText: "Network Error",
+          headers: {},
+          body: { error: error.message },
+          error_category: "backend_unavailable" as const,
+        };
       }
-      return {
+    } else {
+      result = {
         status: 0,
-        statusText: "Network Error",
+        statusText: "Unknown Error",
         headers: {},
-        body: { error: error.message },
+        body: { error: String(error) },
         error_category: "backend_unavailable" as const,
       };
     }
-    return {
-      status: 0,
-      statusText: "Unknown Error",
-      headers: {},
-      body: { error: String(error) },
-      error_category: "backend_unavailable" as const,
-    };
   } finally {
     clearTimeout(timeout);
   }
+  const elapsedMs = performance.now() - started;
+  recordUpstream(upperMethod, result.status, elapsedMs / 1000);
+  auditWrite(currentCallContext(), { method: upperMethod, path: url.pathname, status: result.status, durationMs: Math.round(elapsedMs) });
+  return result;
 }
