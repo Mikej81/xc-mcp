@@ -397,7 +397,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
       "auto-paginates via scroll_id, and supports group_by aggregation.",
     {
       namespace: z.string().describe("Namespace"),
-      lb_name: z.string().optional().describe("LB name (sets vh_name label)"),
+      lb_name: z.string().optional().describe("HTTP LB name, plain (vh_name prefix added)"),
       start: z.string().describe("RFC3339 start time"),
       end: z.string().describe("RFC3339 end time"),
       rsp_code_class: z.string().optional().describe("1xx/2xx/3xx/4xx/5xx"),

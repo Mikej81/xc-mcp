@@ -1,6 +1,7 @@
 import type { TenantConfig } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
 import { MAX_TOOL_OUTPUT } from "../lib/constants.js";
+import { lbVhName } from "../lib/access-logs.js";
 
 export interface QueryAccessLogsParams {
   namespace: string;
@@ -23,12 +24,12 @@ interface AccessLogResponse {
 
 /**
  * Build a Loki-style label query from convenience filters, e.g.:
- *   { vh_name="bigip-coexist-test", rsp_code_class="5xx" }
+ *   { vh_name="ves-io-http-loadbalancer-bigip-coexist-test", rsp_code_class="5xx" }
  */
 function buildQuery(params: QueryAccessLogsParams): string {
   if (params.query) return params.query;
   const labels: string[] = [];
-  if (params.lb_name) labels.push(`vh_name="${params.lb_name}"`);
+  if (params.lb_name) labels.push(`vh_name="${lbVhName(params.lb_name)}"`);
   if (params.rsp_code_class) labels.push(`rsp_code_class="${params.rsp_code_class}"`);
   return `{${labels.join(",")}}`;
 }

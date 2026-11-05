@@ -20,7 +20,7 @@ describe("handleQueryLbMetrics", () => {
     ];
     mockCallApi.mockResolvedValueOnce({
       status: 200, statusText: "OK", headers: {},
-      body: { data: entries.map((e) => JSON.stringify(e)), scroll_id: "" },
+      body: { logs: entries.map((e) => JSON.stringify(e)), scroll_id: "" },
     });
 
     const result = await handleQueryLbMetrics(config, {
@@ -56,11 +56,11 @@ describe("handleQueryLbMetrics", () => {
     const e2 = { time: "2026-05-27T10:00:25Z", rsp_code_class: "2xx" };
     mockCallApi.mockResolvedValueOnce({
       status: 200, statusText: "OK", headers: {},
-      body: { data: [JSON.stringify(e1)], scroll_id: "next1" },
+      body: { logs: [JSON.stringify(e1)], scroll_id: "next1" },
     });
     mockCallApi.mockResolvedValueOnce({
       status: 200, statusText: "OK", headers: {},
-      body: { data: [JSON.stringify(e2)], scroll_id: "" },
+      body: { logs: [JSON.stringify(e2)], scroll_id: "" },
     });
 
     const result = await handleQueryLbMetrics(config, {
@@ -79,7 +79,7 @@ describe("handleQueryLbMetrics", () => {
   it("returns an empty buckets array when no entries match", async () => {
     mockCallApi.mockResolvedValueOnce({
       status: 200, statusText: "OK", headers: {},
-      body: { data: [], scroll_id: "" },
+      body: { logs: [], scroll_id: "" },
     });
 
     const result = await handleQueryLbMetrics(config, {
@@ -88,6 +88,31 @@ describe("handleQueryLbMetrics", () => {
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.buckets).toEqual([]);
+  });
+
+  it("reads entries from the real access_logs shape (logs, total_hits)", async () => {
+    mockCallApi.mockResolvedValueOnce({
+      status: 200, statusText: "OK", headers: {},
+      body: {
+        logs: [JSON.stringify({ time: "2026-11-05T18:16:00Z", rsp_code_class: "2xx" })],
+        total_hits: "1", aggs: {}, scroll_id: "", last_sort_values: null,
+      },
+    });
+    const result = await handleQueryLbMetrics(config, {
+      namespace: "m-coleman", lb_name: "xc-mcp-lb",
+      start: "2026-11-05T18:15:00Z", end: "2026-11-05T18:30:00Z", bucket: "5m",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.buckets).toEqual([{ time: "2026-11-05T18:15:00Z", total: 1, by_class: { "2xx": 1 } }]);
+  });
+
+  it("does not double the vh_name prefix when given a prefixed name", async () => {
+    mockCallApi.mockResolvedValueOnce({ status: 200, statusText: "OK", headers: {}, body: { logs: [] } });
+    await handleQueryLbMetrics(config, {
+      namespace: "default", lb_name: "ves-io-http-loadbalancer-my-lb",
+      start: "2026-05-27T10:00:00Z", end: "2026-05-27T10:05:00Z",
+    });
+    expect(mockCallApi.mock.calls[0][3].body.query).toBe('{vh_name="ves-io-http-loadbalancer-my-lb"}');
   });
 
   it("rejects an invalid bucket value", async () => {

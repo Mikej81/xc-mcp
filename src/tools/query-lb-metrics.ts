@@ -1,5 +1,6 @@
 import type { TenantConfig, QueryLbMetricsParams } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
+import { lbVhName } from "../lib/access-logs.js";
 
 const BUCKET_SECONDS: Record<string, number> = {
   "1m": 60,
@@ -26,7 +27,7 @@ export async function handleQueryLbMetrics(
 
   const ns = encodeURIComponent(params.namespace);
   const baseBody = {
-    query: `{vh_name="ves-io-http-loadbalancer-${params.lb_name}"}`,
+    query: `{vh_name="${lbVhName(params.lb_name)}"}`,
     namespace: params.namespace,
     start_time: params.start,
     end_time: params.end,
@@ -44,7 +45,8 @@ export async function handleQueryLbMetrics(
     if (resp.status >= 400) {
       return { content: [{ type: "text", text: `access_logs query failed: ${resp.status} ${resp.statusText}` }], isError: true };
     }
-    const data = ((resp.body as any).data || []) as unknown[];
+    const logs = (resp.body as any)?.logs;
+    const data = (Array.isArray(logs) ? logs : []) as unknown[];
     for (const raw of data) {
       let entry: any;
       try {

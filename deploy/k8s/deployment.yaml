@@ -24,7 +24,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: xc-mcp
-          image: ghcr.io/mikej81/xc-mcp:0.6.1
+          image: ghcr.io/mikej81/xc-mcp:0.6.2
           ports:
             - name: http
               containerPort: 3000
@@ -77,6 +77,9 @@ spec:
               cpu: 500m
               memory: 512Mi
           securityContext:
+            # F5 XC vK8s rejects runAsUser ("SecurityContext RunAsUser is not
+            # allowed"). On vK8s, delete these two lines; the image's
+            # USER appuser still runs the server as uid 1001.
             runAsNonRoot: true
             runAsUser: 1001
             allowPrivilegeEscalation: false
