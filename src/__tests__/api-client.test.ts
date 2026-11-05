@@ -44,6 +44,13 @@ describe("callApi", () => {
     expect(result.body).toEqual({ items: [] });
   });
 
+  it("never follows redirects: a 302 is returned as-is and fetch uses redirect manual", async () => {
+    mockFetch({ status: 302, statusText: "Found", headers: { location: "https://evil.example/x" }, text: "" });
+    const result = await callApi(config, "GET", "/api/web/namespaces");
+    expect(result.status).toBe(302);
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].redirect).toBe("manual");
+  });
+
   it("returns non-200 status without throwing", async () => {
     mockFetch({ status: 404, statusText: "Not Found", text: '{"error": "not found"}' });
     const result = await callApi(config, "GET", "/api/test");
@@ -198,5 +205,56 @@ describe("callApi", () => {
     mockFetch({ text: '{"items":[]}' });
     const result = await callApi(config, "GET", "/api/test");
     expect(result.error_category).toBeUndefined();
+  });
+  describe("origin pinning and timeoutMs", () => {
+    const rejected = {
+      status: 400,
+      statusText: "Bad Request",
+      headers: {},
+      body: { error: "Path must be relative to the tenant URL" },
+      error_category: "validation_error",
+    };
+
+    it("rejects protocol-relative path //evil.com/x without calling fetch", async () => {
+      const result = await callApi(config, "GET", "//evil.com/x");
+      expect(result).toEqual(rejected);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("rejects absolute path http://169.254.169.254/latest", async () => {
+      const result = await callApi(config, "GET", "http://169.254.169.254/latest");
+      expect(result).toEqual(rejected);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("allows normal /api/web/namespaces", async () => {
+      mockFetch({ text: "{}" });
+      const result = await callApi(config, "GET", "/api/web/namespaces");
+      expect(result.status).toBe(200);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("honors timeoutMs", async () => {
+      vi.useFakeTimers();
+      try {
+        (fetch as ReturnType<typeof vi.fn>).mockImplementation(
+          (_u: string, init: { signal: AbortSignal }) =>
+            new Promise((_res, rej) => {
+              init.signal.addEventListener("abort", () => {
+                const e = new Error("aborted");
+                e.name = "AbortError";
+                rej(e);
+              });
+            }),
+        );
+        const p = callApi(config, "GET", "/api/test", { timeoutMs: 50 });
+        await vi.advanceTimersByTimeAsync(60);
+        const result = await p;
+        expect(result.status).toBe(408);
+        expect((result.body as any).error).toContain("0.05s");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

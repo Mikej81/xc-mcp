@@ -33,12 +33,23 @@ export async function callApi(
     queryParams?: Record<string, string>;
     body?: unknown;
     skipTruncation?: boolean;
+    timeoutMs?: number;
   } = {},
 ): Promise<ApiResponse> {
-  const { pathParams = {}, queryParams = {}, body, skipTruncation = false } = options;
+  const { pathParams = {}, queryParams = {}, body, skipTruncation = false, timeoutMs = REQUEST_TIMEOUT_MS } = options;
 
   const path = substitutePath(pathTemplate, pathParams);
   const url = new URL(path, config.tenantUrl);
+
+  if (url.origin !== new URL(config.tenantUrl).origin) {
+    return {
+      status: 400,
+      statusText: "Bad Request",
+      headers: {},
+      body: { error: "Path must be relative to the tenant URL" },
+      error_category: "validation_error" as const,
+    };
+  }
 
   for (const [key, value] of Object.entries(queryParams)) {
     url.searchParams.set(key, value);
@@ -56,7 +67,7 @@ export async function callApi(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let serializedBody: string | undefined;
   if (body === undefined) {
@@ -82,6 +93,7 @@ export async function callApi(
       headers,
       body: serializedBody,
       signal: controller.signal,
+      redirect: "manual",
       ...(config.p12Dispatcher ? { dispatcher: config.p12Dispatcher } : {}),
     });
 
@@ -126,7 +138,7 @@ export async function callApi(
           status: 408,
           statusText: "Request Timeout",
           headers: {},
-          body: { error: `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s` },
+          body: { error: `Request timed out after ${timeoutMs / 1000}s` },
           error_category: "timeout" as const,
         };
       }

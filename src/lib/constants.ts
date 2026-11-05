@@ -9,3 +9,6 @@ export const MAX_SCHEMA_OUTPUT = 50_000;
 
 /** API request timeout (ms). */
 export const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Maximum accepted HTTP request body (bytes). Larger bodies get 413. */
+export const MAX_REQUEST_BODY_BYTES = 256 * 1024; // 256 KiB

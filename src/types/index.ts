@@ -148,8 +148,24 @@ export interface TenantConfig {
   defaultNamespace?: string;
 }
 
+export type ServerMode = "local" | "hosted";
+
+export interface HostedConfig {
+  allowedDomains: string[];
+  maxSessions: number;
+  maxSessionsPerCredential: number;
+  /** A session must be idle at least this long before a session cap may evict it. */
+  evictMinIdleMs: number;
+}
+
 export interface ServerConfig {
   tenants: TenantConfig[];
   specsDir: string;
   indexPath: string;
+  mode: ServerMode;
+  hosted?: HostedConfig;
+  /** MCP_READ_ONLY: hide mutating tools and allow only GET through xc_call_api. */
+  readOnly?: boolean;
+  /** MCP_SHUTDOWN_DRAIN_SECONDS in ms: how long /readyz reports 503 before the server stops accepting. */
+  shutdownDrainMs?: number;
 }

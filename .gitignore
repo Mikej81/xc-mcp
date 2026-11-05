@@ -121,3 +121,4 @@ demo/
 .DS*
 @eaDir/
 docs/
+.xc-smoke-token

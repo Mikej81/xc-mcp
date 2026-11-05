@@ -52,6 +52,7 @@ The biggest challenge with API-heavy MCP tools is context bloat. Every response 
 |------|---------|---------|--------------|
 | **stdio** (default) | `MCP_TRANSPORT=stdio` or unset | Claude Code | Client spawns the server as a subprocess, communicates over stdin/stdout |
 | **http** | `MCP_TRANSPORT=http` | ChatGPT, Bifrost, remote clients | Server listens on HTTP (default port 3000). Clients connect to **`/mcp`**. Pointing at `/` returns 404. |
+| **http + hosted** | `MCP_TRANSPORT=http` and `MCP_MODE=hosted` | Shared deployments | One server, many users. Each user sends their own tenant credentials as request headers. See [Hosted Mode](#hosted-mode). |
 
 ---
 
@@ -121,6 +122,84 @@ claude mcp list          # See all registered servers
 claude mcp remove f5-xc  # Remove this server
 /mcp                     # View status inside Claude Code
 ```
+
+---
+
+## Setup: Google Antigravity
+
+Antigravity reads MCP servers from a single `mcp_config.json`. Servers sit under an `mcpServers` object, keyed by name. The format below follows [Antigravity's MCP docs](https://antigravity.google/docs/mcp).
+
+### Find the config file
+
+- **IDE:** click **...** at the top of the agent side panel, choose **MCP Servers**, then **Manage MCP Servers**, then **View raw config**.
+- **App:** open **Customizations**, then **Installed**, and find the **MCP Servers** section. **Copy Config File Path** gives you the file location. The docs describe no form for custom entries, so edit the file.
+- **CLI:** edit the file directly. The paths below also apply to the IDE.
+
+Both the IDE and the CLI use `~/.gemini/config/mcp_config.json` for all projects and `<workspace>/.agents/mcp_config.json` for one workspace.
+
+A third-party guide lists `~/.gemini/antigravity/mcp_config.json`, so trust the path the IDE or App shows you.
+
+### Local mode (Docker)
+
+Pull the image as in [Claude Code Option A](#option-a-docker-recommended), then add this entry:
+
+```json
+{
+  "mcpServers": {
+    "f5-xc": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "XC_API_TOKEN", "-e", "XC_TENANT_URL", "ghcr.io/mikej81/xc-mcp:latest"],
+      "env": {
+        "XC_API_TOKEN": "YOUR_API_TOKEN_HERE",
+        "XC_TENANT_URL": "https://your-tenant.console.ves.volterra.io"
+      }
+    }
+  }
+}
+```
+
+### Local mode (Node.js)
+
+Run `npm install && npm run build`, then point `command` at the built entry point:
+
+```json
+{
+  "mcpServers": {
+    "f5-xc": {
+      "command": "node",
+      "args": ["/absolute/path/to/xc-mcp/dist/src/index.js"],
+      "env": {
+        "XC_API_TOKEN": "YOUR_API_TOKEN_HERE",
+        "XC_TENANT_URL": "https://your-tenant.console.ves.volterra.io"
+      }
+    }
+  }
+}
+```
+
+### Hosted mode
+
+If your team runs a shared server, use a remote entry with your own credentials as headers. Antigravity takes `serverUrl` for the endpoint, and the docs say `url` also works. Remote servers must speak Streamable HTTP, which this server does. See [Hosted Mode](#hosted-mode) for the headers, error codes and operator notes. The token sits in plaintext in this file, so keep it in the global file and never commit a workspace `.agents/mcp_config.json` that contains it.
+
+```json
+{
+  "mcpServers": {
+    "f5-xc": {
+      "serverUrl": "https://<host>/mcp",
+      "headers": {
+        "X-XC-Tenant-Url": "https://your-tenant.console.ves.volterra.io",
+        "X-XC-Tenant-Token": "YOUR_API_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
+
+### Verify
+
+- **CLI:** type `/mcp` and press Enter. The MCP Manager shows each server as active, disconnected or loading, with connection logs.
+- **App:** the server's status dot in the MCP Servers section turns green with its tools listed, or red with an error such as "Unauthorized".
+- **IDE:** the docs describe no check for custom servers. Reopen **Manage MCP Servers** and look for `f5-xc`. If it is missing, check the raw config for JSON errors.
 
 ---
 
@@ -220,9 +299,24 @@ XC_TENANT_DEV_DEFAULT_NAMESPACE=dev-sandbox
 
 An explicit namespace always takes priority. If neither is set, the server asks the user to pick one.
 
+## Read-Only Mode
+
+Set `MCP_READ_ONLY=true` to stop the server from changing anything in a tenant. The tools that write (`xc_create_cert`, `xc_patch_resource`, `xc_lb_set_request_headers`, `xc_pool_attach_healthcheck`, `xc_pool_detach_healthcheck`) disappear from the tool list, and `xc_call_api` accepts only `GET`. The query tools keep working, including `xc_query_access_logs` and `xc_query_lb_metrics`, which send `POST` requests that only read. This works in every transport and mode.
+
+Over HTTP, a client can also ask for read-only on its own requests by sending `X-XC-Read-Only: true`. The tools stay listed, but any call that would write returns an error. The values `false`, `0`, `no`, or an empty header leave writes on. Any other value turns read-only on, so a typo fails safe. Use it when you want to explore a production tenant without any chance of a change:
+
+```bash
+claude mcp add --transport http f5-xc-readonly https://<host>/mcp \
+  --header "X-XC-Tenant-Url: https://your-tenant.console.ves.volterra.io" \
+  --header "X-XC-Tenant-Token: <token>" \
+  --header "X-XC-Read-Only: true"
+```
+
+Every tool also declares MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). Clients such as Claude Code use them to decide when to ask before running a tool. `xc_call_api` is marked destructive because it can send `DELETE`.
+
 ## HTTP Endpoint and Security
 
-The HTTP transport serves a **single endpoint**: `/mcp`. All MCP traffic goes to this path: `POST` for client-to-server messages, `GET` for the SSE streaming channel, and `DELETE` for session teardown. Pointing a client at the bare host (`/`) returns 404. When configuring Bifrost, the ChatGPT connector, or any other MCP HTTP client, the connector URL must end in `/mcp` (for example: `https://xc-mcp.example.com/mcp`).
+The HTTP transport serves MCP on a **single endpoint**: `/mcp`. All MCP traffic goes to this path: `POST` for client-to-server messages, `GET` for the SSE streaming channel, and `DELETE` for session teardown. Pointing a client at the bare host (`/`) returns 404. When configuring Bifrost, the ChatGPT connector, or any other MCP HTTP client, the connector URL must end in `/mcp` (for example: `https://xc-mcp.example.com/mcp`).
 
 When deploying the HTTP transport publicly (for example, behind an F5 XC public load balancer), set both `MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE`. Without them, anything that can reach `/mcp` can use the server. That's fine for local development, but never appropriate on the open internet.
 
@@ -236,9 +330,138 @@ The check runs before body parsing, so failed requests never create a session. F
 
 Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
 
+### Health checks and shutdown
+
+Two probe endpoints sit outside `/mcp` and skip the auth header, so a load balancer or Kubernetes can reach them. They answer `GET` and `HEAD`; other methods get 405.
+
+| Path | Returns |
+|------|---------|
+| `/healthz` | 200 `{"status":"ok"}` while the process is up. Use it for liveness. |
+| `/readyz` | 200 `{"status":"ready"}`, or 503 `{"status":"shutting_down"}` once shutdown starts. Use it for readiness. |
+
+Probe requests are not written to the access log.
+
+On `SIGTERM` or `SIGINT` the server turns `/readyz` to 503 and refuses new sessions with 503 `shutting_down`. It then waits `MCP_SHUTDOWN_DRAIN_SECONDS` (default 0) so the load balancer sees the failed readiness check and stops sending traffic, stops accepting connections, closes open sessions and exits 0. Tool calls still running at that point are cut off, not waited for. If closing takes more than 10 seconds after the drain window, the server exits 1.
+
+On Kubernetes, set `MCP_SHUTDOWN_DRAIN_SECONDS` to a few seconds longer than your readiness probe's `periodSeconds`, and set `terminationGracePeriodSeconds` above the drain time plus 10. With the default of 0, the server stops accepting connections as soon as it gets the signal, which suits `docker stop`.
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 3000 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 3000 }
+```
+
+The Docker image's `HEALTHCHECK` calls `/healthz` when `MCP_TRANSPORT=http`. In stdio mode there is no port to probe, so it reports healthy while the process runs.
+
 ### Client compatibility (MCP Tasks RFC)
 
 The MCP SDK marks every tool with `execution.taskSupport: "forbidden"` per the Tasks RFC. Some current clients (Bifrost, certain OpenWebUI builds) misread that field and skip the tool. The server detects clients that did not advertise `capabilities.tasks` during `initialize` and strips the field from the `tools/list` response for those sessions only. Tasks-RFC-aware clients still receive the full descriptor. No configuration needed.
+
+---
+
+## Hosted Mode
+
+Hosted mode runs one server for many users with no local install. The server holds no tenant credentials. Each user sends their own tenant URL and API token as headers on every request, and the server uses them for that user's session only.
+
+### Server setup
+
+```bash
+MCP_TRANSPORT=http
+MCP_MODE=hosted
+# Optional: tenant domains the server may call (default: .console.ves.volterra.io)
+XC_HOSTED_ALLOWED_DOMAINS=.console.ves.volterra.io,.<your-fedramp-domain>
+```
+
+The server refuses to start if `MCP_MODE=hosted` is set without `MCP_TRANSPORT=http`, or if any `XC_API_TOKEN`, `XC_TENANT_URL`, `XC_API_P12_*` or `XC_TENANT_<NAME>_*` variable is set. Hosted mode never reads tenant credentials from the environment.
+
+`XC_HOSTED_ALLOWED_DOMAINS` is a comma-separated list of domain suffixes. A leading dot is added if you leave it out. A tenant URL must be `https://<tenant><suffix>`, with exactly one label in front of the suffix. FedRAMP tenants live outside `ves.volterra.io`, so add their domain here. Anything off the list gets a 401.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_HOSTED_MAX_SESSIONS` | `500` | Process-wide session cap. |
+| `MCP_HOSTED_MAX_SESSIONS_PER_CREDENTIAL` | `5` | Cap per tenant URL and token pair. |
+| `MCP_HOSTED_EVICT_MIN_IDLE_SECONDS` | `300` | How long a session must sit idle before a cap can evict it. |
+
+All three must be positive integers. The server fails at startup on anything else.
+
+When a new `initialize` hits a cap, the server looks at the least recently active session in that scope: the caller's own sessions for the per-credential cap, all sessions for the global cap. If that session has been idle for at least `MCP_HOSTED_EVICT_MIN_IDLE_SECONDS`, the server closes it and admits the new one. If it was active more recently, the server evicts nothing and refuses the new session with 429 `too_many_sessions` (per-credential cap) or 503 `server_busy` (global cap). The `Retry-After` header gives the seconds until that session crosses the idle threshold.
+
+`MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE` still work in hosted mode and are checked first. Use them to keep the endpoint closed to anyone without the shared secret.
+
+### Request headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-XC-Tenant-Url` | Yes | Tenant URL, for example `https://your-tenant.console.ves.volterra.io`. Must be HTTPS with no port, path, query or userinfo. |
+| `X-XC-Tenant-Token` | Yes | XC API token. P12 (mTLS) auth is not supported in hosted mode. |
+| `X-XC-Tenant-Namespace` | No | Default namespace for the session. |
+| `X-XC-Read-Only` | No | `true` refuses any tool call that would write. See [Read-Only Mode](#read-only-mode). |
+
+Send all of them on every request, not only on `initialize`. A repeated or comma-joined value is rejected.
+
+On `initialize`, the server verifies the token with a `whoami` call to the tenant (10 second timeout) before it creates a session. Later requests on the session must carry the same URL and token.
+
+| Status | Body | Cause |
+|--------|------|-------|
+| 401 | `{"error":"unauthorized","reason":"missing_tenant_url"}` | `X-XC-Tenant-Url` absent or empty |
+| 401 | `...,"reason":"missing_token"` | `X-XC-Tenant-Token` absent or empty |
+| 401 | `...,"reason":"invalid_tenant_url"` | URL is not a bare HTTPS origin |
+| 401 | `...,"reason":"url_not_allowed"` | Host is not under an allowed domain |
+| 401 | `...,"reason":"duplicate_header"` | A credential header was sent more than once |
+| 401 | `{"error":"invalid_credentials"}` | The tenant rejected the token (401 or 403) |
+| 502 | `{"error":"tenant_unreachable"}` | The tenant timed out, errored, or was unreachable |
+| 404 | `{"error":"session_not_found"}` | Unknown or expired session id |
+| 429 | `{"error":"too_many_sessions"}` | Per-credential cap reached and none of the caller's sessions has been idle long enough to evict. Sent with `Retry-After`. |
+| 503 | `{"error":"server_busy"}` | Global cap reached and no session has been idle long enough to evict. Sent with `Retry-After`. |
+| 403 | `{"error":"session_credential_mismatch"}` | The credentials differ from the ones that opened the session |
+
+### Client configuration
+
+Claude Code:
+
+```bash
+claude mcp add --transport http f5-xc https://<host>/mcp \
+  --header "X-XC-Tenant-Url: https://your-tenant.console.ves.volterra.io" \
+  --header "X-XC-Tenant-Token: <your-api-token>"
+```
+
+Cursor (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "f5-xc": {
+      "url": "https://<host>/mcp",
+      "headers": {
+        "X-XC-Tenant-Url": "https://your-tenant.console.ves.volterra.io",
+        "X-XC-Tenant-Token": "<your-api-token>"
+      }
+    }
+  }
+}
+```
+
+Antigravity: see [Setup: Google Antigravity](#setup-google-antigravity). It uses `serverUrl` and the same `headers` object.
+
+If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each config.
+
+### What changes for tools
+
+- The `tenant` parameter is ignored. Every call goes to the tenant in the request headers, and `xc_list_tenants` shows only that tenant.
+- `xc_call_api` rejects any path that resolves outside the tenant origin, such as an absolute URL. This check applies in local mode too.
+- `xc_resolve_schema_ref` rejects any `spec_file` that resolves outside the specs directory, such as one containing `../`. This check applies in local mode too.
+
+### Operator notes
+
+- Run it behind TLS. The token travels in a header on every request.
+- Rate-limit at the proxy. The server does not throttle requests.
+- It runs as a single process. Sessions live in memory, so scaling out needs sticky routing on `Mcp-Session-Id`.
+- Rotating a token means a new session. The old session keeps returning 403 until the client reconnects.
+- Request bodies over 256 KiB get 413 `payload_too_large`. The largest XC API bodies are around 164 KB, and a certificate plus key fits well under the limit.
+- A session cap can only evict a session idle for `MCP_HOSTED_EVICT_MIN_IDLE_SECONDS` or longer, and the global cap can pick any user's session. While every session is active, new users get 503 `server_busy`, so size `MCP_HOSTED_MAX_SESSIONS` for the number of users you expect.
+- Idle sessions expire after 30 minutes. A client that reuses an evicted or expired session gets 404 `session_not_found` and should reconnect.
+- Access logs carry the tenant hostname. They never carry tokens. Request-body logging at `MCP_LOG_LEVEL=debug` is suppressed in hosted mode, because tool arguments can hold secrets.
 
 ---
 
@@ -259,6 +482,13 @@ The MCP SDK marks every tool with `execution.taskSupport: "forbidden"` per the T
 | `XC_DEFAULT_TENANT` | No | -- | Name of the tenant to use when `tenant` is omitted and multiple tenants are configured. Must match one of the `XC_TENANT_<NAME>_URL` names (case-insensitive). |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
+| `MCP_SHUTDOWN_DRAIN_SECONDS` | No | `0` | HTTP only. Seconds to report not-ready on `/readyz` after `SIGTERM` before the server stops accepting connections. See [Health checks and shutdown](#health-checks-and-shutdown). |
+| `MCP_READ_ONLY` | No | `false` | `true` hides the tools that write and limits `xc_call_api` to `GET`. See [Read-Only Mode](#read-only-mode). |
+| `MCP_MODE` | No | `local` | Set to `hosted` for [Hosted Mode](#hosted-mode). Requires `MCP_TRANSPORT=http` and no tenant variables. |
+| `XC_HOSTED_ALLOWED_DOMAINS` | No | `.console.ves.volterra.io` | Hosted mode only. Comma-separated tenant domain suffixes. |
+| `MCP_HOSTED_MAX_SESSIONS` | No | `500` | Hosted mode only. Process-wide session cap. |
+| `MCP_HOSTED_MAX_SESSIONS_PER_CREDENTIAL` | No | `5` | Hosted mode only. Session cap per tenant URL and token pair. |
+| `MCP_HOSTED_EVICT_MIN_IDLE_SECONDS` | No | `300` | Hosted mode only. Minimum idle time before a session cap can evict a session. |
 | `MCP_AUTH_HEADER_NAME` | No* | -- | Name of the auth header required on every `/mcp` HTTP request (e.g. `X-API-Key`). Optional but strongly recommended for any public deployment. |
 | `MCP_AUTH_HEADER_VALUE` | No* | -- | Expected value for the auth header. Compared in constant time. Inject via secret-store; never bake into the image. |
 | `MCP_LOG_LEVEL` | No | `info` | Log level: `debug` \| `info` \| `warn` \| `error`. At `debug`, each access-log line additionally includes the parsed JSON-RPC request body (capped at 4 KB chars). Response bodies are never logged. |
@@ -355,7 +585,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 317 unit tests
+npm test                 # Run 441 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 
@@ -382,6 +612,6 @@ At build time, 268 OpenAPI spec files are parsed into a searchable index with O(
 
 All API calls go through a shared HTTP client that handles auth headers, request timeouts (30s), and response truncation (50KB for `xc_call_api`, unlimited for list tools that do their own extraction). Non-2xx responses carry an `error_category` field (`auth_failure`, `permission_denied`, `not_found`, `timeout`, `config_conflict`, `rate_limited`, `validation_error`, `backend_unavailable`, `server_error`) so callers can branch on the category without parsing the body. Private keys are always blindfold-encrypted using the tenant's RSA public key before transmission.
 
-The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user with a health check.
+The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user. Its health check calls `/healthz` in HTTP mode.
 
 On startup, the server checks GitHub for newer releases and logs a notice if an update is available. The version is also shown in `xc_list_tenants` output.

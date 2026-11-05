@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import { join } from "path";
+import { resolve, sep } from "path";
 import type { ServerConfig } from "../types/index.js";
 import { resolveRef } from "../lib/schema-resolver.js";
 import { MAX_SCHEMA_OUTPUT } from "../lib/constants.js";
@@ -16,12 +16,20 @@ export async function handleResolveSchemaRef(
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
   const maxDepth = Math.min(Math.max(params.max_depth ?? 8, 1), 12);
 
+  const specPath = resolve(config.specsDir, params.spec_file);
+  if (!specPath.startsWith(resolve(config.specsDir) + sep)) {
+    return {
+      content: [{ type: "text", text: "Invalid spec_file" }],
+      isError: true,
+    };
+  }
+
   let spec: any;
   try {
-    spec = JSON.parse(readFileSync(join(config.specsDir, params.spec_file), "utf-8"));
-  } catch (err) {
+    spec = JSON.parse(readFileSync(specPath, "utf-8"));
+  } catch {
     return {
-      content: [{ type: "text", text: `Failed to read spec "${params.spec_file}": ${(err as Error).message}` }],
+      content: [{ type: "text", text: `Failed to read spec "${params.spec_file}"` }],
       isError: true,
     };
   }

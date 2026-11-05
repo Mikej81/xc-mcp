@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 -- 2026-11-05
+
+### Hosted mode and two security fixes
+
+Adds a hosted deployment mode where one server serves many users, each with their own tenant credentials. Also closes two path-handling holes. No breaking changes for local mode.
+
+- **Hosted mode (#2)** -- set `MCP_MODE=hosted` with `MCP_TRANSPORT=http`. The server holds no tenant credentials. Each request carries `X-XC-Tenant-Url`, `X-XC-Tenant-Token`, and an optional `X-XC-Tenant-Namespace`. Tools resolve the tenant from those headers, so the `tenant` parameter is ignored and `xc_list_tenants` shows only the caller's tenant, without update hints. Startup fails if `MCP_TRANSPORT` is not `http` or any XC tenant env var is set.
+- **Tenant URL allowlist** -- the tenant URL must be a bare HTTPS origin under an allowed domain. `XC_HOSTED_ALLOWED_DOMAINS` sets the list (default `.console.ves.volterra.io`). FedRAMP tenants need their own domain added.
+- **Credential check on initialize** -- the server calls `whoami` on the tenant (10 second timeout) before creating a session. A rejected token returns 401 `invalid_credentials`. An unreachable tenant returns 502 `tenant_unreachable`. Neither creates a session.
+- **Session binding** -- each session is bound to a SHA-256 fingerprint of the tenant URL and token. A request on that session with different credentials gets 403 `session_credential_mismatch`. Raw tokens are never stored.
+- **Session caps** -- `MCP_HOSTED_MAX_SESSIONS` (default 500) and `MCP_HOSTED_MAX_SESSIONS_PER_CREDENTIAL` (default 5). At a cap, the server evicts the least recently active session in that scope only if it has been idle for `MCP_HOSTED_EVICT_MIN_IDLE_SECONDS` (default 300). Otherwise it evicts nothing and refuses the new session: 429 `too_many_sessions` at the per-credential cap, 503 `server_busy` at the global cap, both with `Retry-After`.
+- **Request body cap** -- HTTP request bodies over 256 KiB get 413 `payload_too_large`, in local and hosted mode. The server stops reading at the limit, including for chunked bodies with no `Content-Length`. In hosted mode, a request that names an unknown or mismatched session is rejected before its body is read.
+- **No redirects upstream** -- calls to the XC API no longer follow redirects. A 3xx comes back as a non-OK response, and the credential check treats it as `tenant_unreachable`.
+- **Startup validation** -- an unrecognized `MCP_MODE` value now refuses to start. `XC_HOSTED_ALLOWED_DOMAINS` must hold at least one suffix, each with two or more labels and only letters, digits, dots and hyphens.
+- **Logging** -- hosted access logs include the tenant hostname. Debug request-body logging is suppressed in hosted mode because tool arguments can contain secrets.
+- **Security fix: `xc_call_api` origin pinning** -- `callApi` now rejects any path that resolves to a different origin than the tenant URL, such as an absolute URL, with a 400 `validation_error`. This applies in local mode too.
+- **Security fix: `xc_resolve_schema_ref` path traversal** -- `spec_file` is resolved against the specs directory and rejected if it escapes it. Read failures no longer echo the underlying error message.
+- **Refactor** -- tool registration moved to `src/server.ts` and the HTTP handler to `src/http.ts`. New libraries: `hosted.ts`, `credential-check.ts`, `session-registry.ts`.
+- **Health endpoints** -- `/healthz` (liveness) and `/readyz` (readiness, 503 during shutdown) for load balancers and Kubernetes. They skip the auth header and the access log. The Docker `HEALTHCHECK` now calls `/healthz` in HTTP mode instead of always passing.
+- **Graceful shutdown** -- the HTTP server now handles `SIGTERM` as well as `SIGINT`. It turns `/readyz` to 503, refuses new sessions with 503 `shutting_down`, waits `MCP_SHUTDOWN_DRAIN_SECONDS` (default 0) for the load balancer to stop routing, closes open sessions and exits 0, or exits 1 if closing takes more than 10 seconds. Before this, `docker stop` and Kubernetes rollouts waited out the kill timeout.
+- **Read-only mode** -- `MCP_READ_ONLY=true` hides the five tools that write and limits `xc_call_api` to `GET`. Over HTTP, an `X-XC-Read-Only: true` header refuses write calls on each request that carries it; the tools stay listed. Unrecognized header values fail safe to read-only.
+- **Tool annotations** -- every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so clients can tell read tools from write tools when deciding whether to ask first.
+- **Fix: update check** -- the startup and `xc_list_tenants` update notice compared versions for inequality, so any build newer than the latest release reported the older release as an update. It now compares semver and only reports a newer release.
+- **Unit tests** -- 441 tests across 38 test files (up from 317/32).
+- No removed tools and no breaking changes. Local mode gains the optional `MCP_READ_ONLY` and `MCP_SHUTDOWN_DRAIN_SECONDS` settings and the health, shutdown and security changes above; existing local configs work unchanged. Drop-in upgrade from 0.5.0.
+
 ## 0.5.0 -- 2026-05-27
 
 ### New tools, ergonomics, and error classification
