@@ -31,7 +31,7 @@ export async function startTestServer(
  */
 export function mcpRequest(
   port: number,
-  opts: { method: "POST" | "GET" | "DELETE"; body?: unknown; headers?: Record<string, string> },
+  opts: { method: "POST" | "GET" | "DELETE"; body?: unknown; headers?: Record<string, string>; path?: string },
 ): Promise<{ status: number; headers: IncomingHttpHeaders; json: unknown }> {
   const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
   return new Promise((resolve, reject) => {
@@ -39,7 +39,7 @@ export function mcpRequest(
       {
         host: "127.0.0.1",
         port,
-        path: "/mcp",
+        path: opts.path ?? "/mcp",
         method: opts.method,
         headers: {
           Accept: "application/json, text/event-stream",

@@ -299,9 +299,24 @@ XC_TENANT_DEV_DEFAULT_NAMESPACE=dev-sandbox
 
 An explicit namespace always takes priority. If neither is set, the server asks the user to pick one.
 
+## Read-Only Mode
+
+Set `MCP_READ_ONLY=true` to stop the server from changing anything in a tenant. The tools that write (`xc_create_cert`, `xc_patch_resource`, `xc_lb_set_request_headers`, `xc_pool_attach_healthcheck`, `xc_pool_detach_healthcheck`) disappear from the tool list, and `xc_call_api` accepts only `GET`. The query tools keep working, including `xc_query_access_logs` and `xc_query_lb_metrics`, which send `POST` requests that only read. This works in every transport and mode.
+
+Over HTTP, a client can also ask for read-only on its own requests by sending `X-XC-Read-Only: true`. The tools stay listed, but any call that would write returns an error. The values `false`, `0`, `no`, or an empty header leave writes on. Any other value turns read-only on, so a typo fails safe. Use it when you want to explore a production tenant without any chance of a change:
+
+```bash
+claude mcp add --transport http f5-xc-readonly https://<host>/mcp \
+  --header "X-XC-Tenant-Url: https://your-tenant.console.ves.volterra.io" \
+  --header "X-XC-Tenant-Token: <token>" \
+  --header "X-XC-Read-Only: true"
+```
+
+Every tool also declares MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). Clients such as Claude Code use them to decide when to ask before running a tool. `xc_call_api` is marked destructive because it can send `DELETE`.
+
 ## HTTP Endpoint and Security
 
-The HTTP transport serves a **single endpoint**: `/mcp`. All MCP traffic goes to this path: `POST` for client-to-server messages, `GET` for the SSE streaming channel, and `DELETE` for session teardown. Pointing a client at the bare host (`/`) returns 404. When configuring Bifrost, the ChatGPT connector, or any other MCP HTTP client, the connector URL must end in `/mcp` (for example: `https://xc-mcp.example.com/mcp`).
+The HTTP transport serves MCP on a **single endpoint**: `/mcp`. All MCP traffic goes to this path: `POST` for client-to-server messages, `GET` for the SSE streaming channel, and `DELETE` for session teardown. Pointing a client at the bare host (`/`) returns 404. When configuring Bifrost, the ChatGPT connector, or any other MCP HTTP client, the connector URL must end in `/mcp` (for example: `https://xc-mcp.example.com/mcp`).
 
 When deploying the HTTP transport publicly (for example, behind an F5 XC public load balancer), set both `MCP_AUTH_HEADER_NAME` and `MCP_AUTH_HEADER_VALUE`. Without them, anything that can reach `/mcp` can use the server. That's fine for local development, but never appropriate on the open internet.
 
@@ -314,6 +329,30 @@ MCP_AUTH_HEADER_VALUE=<long-random-secret>
 The check runs before body parsing, so failed requests never create a session. Failed auth events are logged at `warn` level with the peer IP and the expected header name (the supplied value is never logged).
 
 Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
+
+### Health checks and shutdown
+
+Two probe endpoints sit outside `/mcp` and skip the auth header, so a load balancer or Kubernetes can reach them. They answer `GET` and `HEAD`; other methods get 405.
+
+| Path | Returns |
+|------|---------|
+| `/healthz` | 200 `{"status":"ok"}` while the process is up. Use it for liveness. |
+| `/readyz` | 200 `{"status":"ready"}`, or 503 `{"status":"shutting_down"}` once shutdown starts. Use it for readiness. |
+
+Probe requests are not written to the access log.
+
+On `SIGTERM` or `SIGINT` the server turns `/readyz` to 503 and refuses new sessions with 503 `shutting_down`. It then waits `MCP_SHUTDOWN_DRAIN_SECONDS` (default 0) so the load balancer sees the failed readiness check and stops sending traffic, stops accepting connections, closes open sessions and exits 0. Tool calls still running at that point are cut off, not waited for. If closing takes more than 10 seconds after the drain window, the server exits 1.
+
+On Kubernetes, set `MCP_SHUTDOWN_DRAIN_SECONDS` to a few seconds longer than your readiness probe's `periodSeconds`, and set `terminationGracePeriodSeconds` above the drain time plus 10. With the default of 0, the server stops accepting connections as soon as it gets the signal, which suits `docker stop`.
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 3000 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 3000 }
+```
+
+The Docker image's `HEALTHCHECK` calls `/healthz` when `MCP_TRANSPORT=http`. In stdio mode there is no port to probe, so it reports healthy while the process runs.
 
 ### Client compatibility (MCP Tasks RFC)
 
@@ -357,6 +396,7 @@ When a new `initialize` hits a cap, the server looks at the least recently activ
 | `X-XC-Tenant-Url` | Yes | Tenant URL, for example `https://your-tenant.console.ves.volterra.io`. Must be HTTPS with no port, path, query or userinfo. |
 | `X-XC-Tenant-Token` | Yes | XC API token. P12 (mTLS) auth is not supported in hosted mode. |
 | `X-XC-Tenant-Namespace` | No | Default namespace for the session. |
+| `X-XC-Read-Only` | No | `true` refuses any tool call that would write. See [Read-Only Mode](#read-only-mode). |
 
 Send all of them on every request, not only on `initialize`. A repeated or comma-joined value is rejected.
 
@@ -442,6 +482,8 @@ If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each co
 | `XC_DEFAULT_TENANT` | No | -- | Name of the tenant to use when `tenant` is omitted and multiple tenants are configured. Must match one of the `XC_TENANT_<NAME>_URL` names (case-insensitive). |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port (only when `MCP_TRANSPORT=http`) |
+| `MCP_SHUTDOWN_DRAIN_SECONDS` | No | `0` | HTTP only. Seconds to report not-ready on `/readyz` after `SIGTERM` before the server stops accepting connections. See [Health checks and shutdown](#health-checks-and-shutdown). |
+| `MCP_READ_ONLY` | No | `false` | `true` hides the tools that write and limits `xc_call_api` to `GET`. See [Read-Only Mode](#read-only-mode). |
 | `MCP_MODE` | No | `local` | Set to `hosted` for [Hosted Mode](#hosted-mode). Requires `MCP_TRANSPORT=http` and no tenant variables. |
 | `XC_HOSTED_ALLOWED_DOMAINS` | No | `.console.ves.volterra.io` | Hosted mode only. Comma-separated tenant domain suffixes. |
 | `MCP_HOSTED_MAX_SESSIONS` | No | `500` | Hosted mode only. Process-wide session cap. |
@@ -543,7 +585,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 429 unit tests
+npm test                 # Run 441 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 
@@ -570,6 +612,6 @@ At build time, 268 OpenAPI spec files are parsed into a searchable index with O(
 
 All API calls go through a shared HTTP client that handles auth headers, request timeouts (30s), and response truncation (50KB for `xc_call_api`, unlimited for list tools that do their own extraction). Non-2xx responses carry an `error_category` field (`auth_failure`, `permission_denied`, `not_found`, `timeout`, `config_conflict`, `rate_limited`, `validation_error`, `backend_unavailable`, `server_error`) so callers can branch on the category without parsing the body. Private keys are always blindfold-encrypted using the tenant's RSA public key before transmission.
 
-The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user with a health check.
+The server runs as either a stdio subprocess (for Claude Code) or an HTTP server with session management and 30-minute idle cleanup (for ChatGPT). The Docker image runs as a non-root user. Its health check calls `/healthz` in HTTP mode.
 
 On startup, the server checks GitHub for newer releases and logs a notice if an update is available. The version is also shown in `xc_list_tenants` output.

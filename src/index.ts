@@ -14,6 +14,7 @@ import { parseAuthConfig, type AuthConfig } from "./lib/auth.js";
 import { log } from "./lib/logger.js";
 import { createMcpServer } from "./server.js";
 import { startHttp } from "./http.js";
+import { parseReadOnlyEnv } from "./lib/tool-policy.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -42,11 +43,23 @@ function resolvePaths() {
  * Build the server config from env. Throws instead of exiting so it is testable.
  * Hosted mode never reads XC tenant env vars (and refuses to start if any are set).
  */
+/** Parse MCP_SHUTDOWN_DRAIN_SECONDS: a non-negative integer, default 0. */
+function parseDrainSeconds(value: string | undefined): number {
+  const v = (value ?? "").trim();
+  if (v === "") return 0;
+  if (!/^\d+$/.test(v) || !Number.isSafeInteger(Number(v))) {
+    throw new Error("MCP_SHUTDOWN_DRAIN_SECONDS must be a non-negative integer");
+  }
+  return Number(v);
+}
+
 export function buildServerConfig(
   env: NodeJS.ProcessEnv,
   paths: { specsDir: string; indexPath: string },
 ): ServerConfig {
   const mode = (env.MCP_MODE ?? "").trim().toLowerCase();
+  const readOnly = parseReadOnlyEnv(env.MCP_READ_ONLY);
+  const shutdownDrainMs = parseDrainSeconds(env.MCP_SHUTDOWN_DRAIN_SECONDS) * 1000;
   if (mode !== "" && mode !== "local" && mode !== "hosted") {
     throw new Error(`MCP_MODE must be "hosted" or "local" (or unset), got "${env.MCP_MODE}"`);
   }
@@ -63,6 +76,8 @@ export function buildServerConfig(
     }
     return {
       mode: "hosted",
+      readOnly,
+      shutdownDrainMs,
       tenants: [],
       hosted: parseHostedConfig(env),
       specsDir: paths.specsDir,
@@ -89,6 +104,8 @@ export function buildServerConfig(
     specsDir: paths.specsDir,
     indexPath: paths.indexPath,
     mode: "local",
+    readOnly,
+    shutdownDrainMs,
   };
 }
 
@@ -138,6 +155,7 @@ async function main() {
   log("info", "startup", {
     version: VERSION,
     mode: config.mode,
+    read_only: config.readOnly === true,
     ...(hosted
       ? {
           allowed_domains: config.hosted?.allowedDomains,

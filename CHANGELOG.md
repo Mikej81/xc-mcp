@@ -18,9 +18,13 @@ Adds a hosted deployment mode where one server serves many users, each with thei
 - **Security fix: `xc_call_api` origin pinning** -- `callApi` now rejects any path that resolves to a different origin than the tenant URL, such as an absolute URL, with a 400 `validation_error`. This applies in local mode too.
 - **Security fix: `xc_resolve_schema_ref` path traversal** -- `spec_file` is resolved against the specs directory and rejected if it escapes it. Read failures no longer echo the underlying error message.
 - **Refactor** -- tool registration moved to `src/server.ts` and the HTTP handler to `src/http.ts`. New libraries: `hosted.ts`, `credential-check.ts`, `session-registry.ts`.
+- **Health endpoints** -- `/healthz` (liveness) and `/readyz` (readiness, 503 during shutdown) for load balancers and Kubernetes. They skip the auth header and the access log. The Docker `HEALTHCHECK` now calls `/healthz` in HTTP mode instead of always passing.
+- **Graceful shutdown** -- the HTTP server now handles `SIGTERM` as well as `SIGINT`. It turns `/readyz` to 503, refuses new sessions with 503 `shutting_down`, waits `MCP_SHUTDOWN_DRAIN_SECONDS` (default 0) for the load balancer to stop routing, closes open sessions and exits 0, or exits 1 if closing takes more than 10 seconds. Before this, `docker stop` and Kubernetes rollouts waited out the kill timeout.
+- **Read-only mode** -- `MCP_READ_ONLY=true` hides the five tools that write and limits `xc_call_api` to `GET`. Over HTTP, an `X-XC-Read-Only: true` header refuses write calls on each request that carries it; the tools stay listed. Unrecognized header values fail safe to read-only.
+- **Tool annotations** -- every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so clients can tell read tools from write tools when deciding whether to ask first.
 - **Fix: update check** -- the startup and `xc_list_tenants` update notice compared versions for inequality, so any build newer than the latest release reported the older release as an update. It now compares semver and only reports a newer release.
-- **Unit tests** -- 429 tests across 37 test files (up from 317/32).
-- No removed tools. No changes to local-mode env vars or behavior beyond the fixes above. Drop-in upgrade from 0.5.0.
+- **Unit tests** -- 441 tests across 38 test files (up from 317/32).
+- No removed tools and no breaking changes. Local mode gains the optional `MCP_READ_ONLY` and `MCP_SHUTDOWN_DRAIN_SECONDS` settings and the health, shutdown and security changes above; existing local configs work unchanged. Drop-in upgrade from 0.5.0.
 
 ## 0.5.0 -- 2026-05-27
 

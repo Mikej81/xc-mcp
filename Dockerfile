@@ -37,7 +37,8 @@ USER appuser
 # Port 3000 used only when MCP_TRANSPORT=http
 EXPOSE 3000
 
+# HTTP transport: probes GET /healthz. stdio transport: no port, reports healthy.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "process.exit(0)"
+  CMD ["node", "dist/src/healthcheck.js"]
 
 ENTRYPOINT ["node", "dist/src/index.js"]

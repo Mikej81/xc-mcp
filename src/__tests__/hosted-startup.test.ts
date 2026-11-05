@@ -48,6 +48,8 @@ describe("buildServerConfig", () => {
     );
     expect(config).toEqual({
       mode: "hosted",
+      readOnly: false,
+      shutdownDrainMs: 0,
       tenants: [],
       hosted: { allowedDomains: [".console.ves.volterra.io"], maxSessions: 500, maxSessionsPerCredential: 2, evictMinIdleMs: 300_000 },
       specsDir: "/specs",

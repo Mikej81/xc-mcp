@@ -1,6 +1,6 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 
 import type { OperationsIndex, ServerConfig, TenantConfig } from "./types/index.js";
@@ -11,6 +11,11 @@ import { SessionRegistry } from "./lib/session-registry.js";
 import { MAX_REQUEST_BODY_BYTES } from "./lib/constants.js";
 import { log } from "./lib/logger.js";
 import { createMcpServer } from "./server.js";
+
+export const HEALTH_PATH = "/healthz";
+export const READY_PATH = "/readyz";
+/** Upper bound on closing sessions during shutdown, after any drain window. */
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 function truncateForLog(value: unknown, maxChars = 4096): unknown {
   try {
@@ -108,7 +113,11 @@ export function createHttpHandler(
   index: OperationsIndex,
   authConfig: AuthConfig,
   options: { /** Clock for session activity tracking (tests). */ now?: () => number } = {},
-): { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>; close: () => Promise<void> } {
+): {
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  close: () => Promise<void>;
+  drain: () => void;
+} {
   const SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
   const hosted = config.mode === "hosted";
   const allowedDomains = config.hosted?.allowedDomains ?? DEFAULT_ALLOWED_DOMAINS;
@@ -133,8 +142,29 @@ export function createHttpHandler(
   }, 60_000); // Check every minute
   cleanupInterval.unref();
 
+  // Set by drain() or close(): /readyz turns 503 and new sessions are refused while existing ones finish.
+  let shuttingDown = false;
+
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url || "/", "http://localhost");
+
+    // Probes for load balancers and Kubernetes. No auth, no access log (probes are frequent).
+    if (url.pathname === HEALTH_PATH || url.pathname === READY_PATH) {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+    }
+    if (url.pathname === HEALTH_PATH) {
+      sendJson(res, 200, { status: "ok" });
+      return;
+    }
+    if (url.pathname === READY_PATH) {
+      if (shuttingDown) sendJson(res, 503, { status: "shutting_down" });
+      else sendJson(res, 200, { status: "ready" });
+      return;
+    }
 
     // Only handle /mcp
     if (url.pathname !== "/mcp") {
@@ -288,6 +318,10 @@ export function createHttpHandler(
 
       // New initialization request
       if (!sessionId && isInitializeRequest(body)) {
+        if (shuttingDown) {
+          sendJson(res, 503, { error: "shutting_down" });
+          return;
+        }
         if (hosted) {
           const check = await verifyCredentials(tenant!);
           if (!check.ok) {
@@ -371,6 +405,7 @@ export function createHttpHandler(
   };
 
   const close = async () => {
+    shuttingDown = true;
     clearInterval(cleanupInterval);
     for (const [sid, transport] of [...registry.entries()]) {
       await transport.close();
@@ -378,7 +413,11 @@ export function createHttpHandler(
     }
   };
 
-  return { handler, close };
+  const drain = () => {
+    shuttingDown = true;
+  };
+
+  return { handler, close, drain };
 }
 
 /**
@@ -386,7 +425,7 @@ export function createHttpHandler(
  */
 export async function startHttp(config: ServerConfig, index: OperationsIndex, authConfig: AuthConfig): Promise<void> {
   const port = parseInt(process.env.MCP_HTTP_PORT || "3000", 10);
-  const { handler, close } = createHttpHandler(config, index, authConfig);
+  const { handler, close, drain } = createHttpHandler(config, index, authConfig);
   const httpServer = createServer((req, res) => {
     handler(req, res).catch((err) => {
       log("error", "request_failed", { error: err instanceof Error ? err.message : String(err) });
@@ -400,10 +439,50 @@ export async function startHttp(config: ServerConfig, index: OperationsIndex, au
     log("info", "http_listening", { port, path: "/mcp" });
   });
 
-  process.on("SIGINT", async () => {
-    log("info", "shutdown", { reason: "sigint" });
-    await close();
-    httpServer.close();
-    process.exit(0);
-  });
+  const shutdown = createShutdown({ httpServer, close, beginDrain: drain, drainMs: config.shutdownDrainMs ?? 0 });
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}
+
+/**
+ * Build a one-shot graceful shutdown. Order: mark not-ready (/readyz 503, new
+ * sessions refused), wait `drainMs` so load balancers stop routing here, stop
+ * accepting connections, close every session, exit 0. If closing takes longer
+ * than `timeoutMs` after the drain window, exit 1. Repeat signals are ignored.
+ * Running tool calls are not waited for; their connections close with the sessions.
+ */
+export function createShutdown(opts: {
+  httpServer: Pick<Server, "close" | "closeAllConnections">;
+  close: () => Promise<void>;
+  beginDrain?: () => void;
+  drainMs?: number;
+  exit?: (code: number) => void;
+  timeoutMs?: number;
+}): (signal: string) => Promise<void> {
+  const exit = opts.exit ?? ((code: number) => process.exit(code));
+  const timeoutMs = opts.timeoutMs ?? SHUTDOWN_TIMEOUT_MS;
+  let started = false;
+  return async (signal: string) => {
+    if (started) return;
+    started = true;
+    const drainMs = opts.drainMs ?? 0;
+    log("info", "shutdown", { reason: signal.toLowerCase(), drain_ms: drainMs, timeout_ms: timeoutMs });
+    opts.beginDrain?.();
+    if (drainMs > 0) await new Promise((resolve) => setTimeout(resolve, drainMs));
+    // Not unref'd: if closing stalls, this timer is what turns the exit code into 1.
+    const force = setTimeout(() => {
+      log("warn", "shutdown_forced", { timeout_ms: timeoutMs });
+      exit(1);
+    }, timeoutMs);
+    const serverClosed = new Promise<void>((resolve) => opts.httpServer.close(() => resolve()));
+    try {
+      await opts.close();
+    } catch (err) {
+      log("warn", "shutdown_close_failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+    opts.httpServer.closeAllConnections();
+    await serverClosed;
+    clearTimeout(force);
+    exit(0);
+  };
 }

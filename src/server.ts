@@ -1,7 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import { z, type ZodRawShape } from "zod";
 
 import { resolveTenant, resolveNamespace } from "./lib/tenant.js";
 import { parseCredentialHeaders, DEFAULT_ALLOWED_DOMAINS } from "./lib/hosted.js";
@@ -25,6 +25,13 @@ import { handlePoolAttachHealthcheck, handlePoolDetachHealthcheck } from "./tool
 import { handleQueryLbMetrics } from "./tools/query-lb-metrics.js";
 import { VERSION, checkForUpdate } from "./lib/version.js";
 import { installTasksRfcCompat } from "./lib/tasks-rfc-compat.js";
+import {
+  TOOL_POLICIES,
+  READ_ONLY_HEADER,
+  GENERIC_API_TOOL,
+  isReadOnlyHeader,
+  readOnlyRefusal,
+} from "./lib/tool-policy.js";
 
 export type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
@@ -85,10 +92,47 @@ export function withTenant(
 }
 
 /**
+ * Register tools with their TOOL_POLICIES annotations and read-only enforcement.
+ * MCP_READ_ONLY hides mutating tools entirely (xc_call_api stays, GET only).
+ * An X-XC-Read-Only request header refuses mutating calls for that request.
+ */
+function makeToolRegistrar(server: McpServer, config: ServerConfig) {
+  return function tool<A extends ZodRawShape>(
+    name: string,
+    description: string,
+    schema: A,
+    cb: ToolCallback<A>,
+  ): void {
+    const policy = TOOL_POLICIES[name];
+    if (!policy) throw new Error(`No TOOL_POLICIES entry for tool "${name}"`);
+    if (config.readOnly && policy.mutates && name !== GENERIC_API_TOOL) return;
+    const desc = config.readOnly && name === GENERIC_API_TOOL
+      ? `${description} Server is read-only: only GET is allowed.`
+      : description;
+    const guarded = ((params: unknown, extra: Extra) => {
+      const readOnly = config.readOnly === true ||
+        isReadOnlyHeader(extra?.requestInfo?.headers?.[READ_ONLY_HEADER]);
+      if (readOnly) {
+        const refusal = readOnlyRefusal(name, params);
+        if (refusal) return { content: [{ type: "text" as const, text: refusal }], isError: true };
+      }
+      return (cb as unknown as (p: unknown, e: Extra) => unknown)(params, extra);
+    }) as unknown as ToolCallback<A>;
+    // With MCP_READ_ONLY, xc_call_api only runs GET, so it advertises itself as read-only.
+    const annotations = config.readOnly && name === GENERIC_API_TOOL
+      ? { readOnlyHint: true, openWorldHint: true }
+      : policy.annotations;
+    server.tool(name, desc, schema, annotations, guarded);
+  };
+}
+
+/**
  * Register all tools on an McpServer instance.
  */
 function registerTools(server: McpServer, config: ServerConfig, index: OperationsIndex) {
-  server.tool(
+  const tool = makeToolRegistrar(server, config);
+
+  tool(
     "xc_discover_apis",
     "Search F5 XC API operations. Only needed when no specific tool fits and you don't " +
       "know the API path. For common reads, prefer xc_list_namespaces, xc_list_resources, " +
@@ -104,7 +148,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     async (params) => handleDiscover(index, params),
   );
 
-  server.tool(
+  tool(
     "xc_get_operation_details",
     "Get request body schema for an API operation. Use summary_mode=true to reduce size. " +
       "x-ves-oneof-field-* marks mutually exclusive fields -- only set ONE per group.",
@@ -118,7 +162,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     async (params) => handleOperationDetails(index, config.specsDir, params),
   );
 
-  server.tool(
+  tool(
     "xc_resolve_schema_ref",
     "Resolve and expand a JSON Schema $ref within an OpenAPI spec file. " +
       "Useful when xc_get_operation_details truncated a nested type at max_depth. " +
@@ -133,7 +177,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_call_api",
     "Generic escape hatch for any F5 XC API call. Prefer specific tools when one fits: " +
       "xc_list_namespaces / xc_list_resources / xc_list_tenants for listing, " +
@@ -167,7 +211,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_list_namespaces",
     "List namespaces. Use prefix to filter.",
     {
@@ -182,7 +226,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_list_resources",
     "List resources in a namespace. Common types: http_loadbalancers, tcp_loadbalancers, " +
       "origin_pools, healthchecks, app_firewalls, certificates, service_policys. " +
@@ -208,7 +252,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_search_resources",
     "Find resources by name across multiple namespaces in one call. " +
       "If 'namespaces' is omitted, scans every namespace visible to the tenant. " +
@@ -228,7 +272,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_create_cert",
     "Generate a self-signed certificate and create it in XC with blindfold-encrypted private key. " +
       "No PEM handling needed — cert is generated and encrypted server-side.",
@@ -245,7 +289,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_patch_resource",
     "Mutate an XC resource via JSON-Patch. Performs GET → strip read-only fields → apply ops → PUT. " +
       "Avoids the GET-mutate-PUT round-trip the caller would otherwise hand-roll. " +
@@ -271,7 +315,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_diff_resource",
     "Show what xc_call_api PUT or xc_patch_resource would change. Returns a JSON-Patch diff " +
       "between the current resource and a proposed body, without applying anything.",
@@ -287,7 +331,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_lb_wait_ready",
     "Poll an HTTP LB until spec.cert_state == CertificateValid (or timeout). " +
       "Returns ready=false on timeout rather than throwing.",
@@ -305,7 +349,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_query_access_logs",
     "Query XC access logs for an LB / time window. Parses stringified log entries, " +
       "auto-paginates via scroll_id, and supports group_by aggregation.",
@@ -328,7 +372,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_dns_zone_status",
     "Diagnostic roll-up for a DNS zone: deployment status, assigned nameservers, " +
       "Operational condition, and optional data-plane reachability probe via local_zone_file. " +
@@ -346,7 +390,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_lb_set_request_headers",
     "Add or remove request headers on an HTTP LB (LB-level spec.add_request_headers). " +
       "Convenience wrapper over a GET/strip/PUT cycle; preserves optimistic concurrency by default.",
@@ -368,7 +412,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_pool_attach_healthcheck",
     "Attach a named healthcheck to an origin_pool's spec.healthcheck list. Idempotent.",
     {
@@ -385,7 +429,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_pool_detach_healthcheck",
     "Remove a named healthcheck from an origin_pool's spec.healthcheck list.",
     {
@@ -402,7 +446,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_query_lb_metrics",
     "Time-bucketed request counts for an HTTP LB derived from access logs. " +
       "Returns per-bucket total + response-code-class breakdown (2xx/3xx/4xx/5xx). " +
@@ -422,7 +466,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     },
   );
 
-  server.tool(
+  tool(
     "xc_list_tenants",
     "List all configured F5 XC tenants. Shows tenant names, URLs, and server version.",
     {},
