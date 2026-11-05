@@ -33,6 +33,29 @@ export interface UpdateCheckResult {
   updateAvailable: boolean;
 }
 
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/;
+
+/**
+ * Compare two semver strings. Returns >0 if a is newer, <0 if b is newer, 0 if equal.
+ * A release outranks its own pre-release (0.6.0 > 0.6.0-rc.1). Pre-release tags are
+ * compared as plain strings. An unparseable version never counts as newer.
+ */
+export function compareVersions(a: string, b: string): number {
+  const ma = SEMVER.exec(a);
+  const mb = SEMVER.exec(b);
+  if (!ma || !mb) return ma ? 1 : mb ? -1 : 0;
+  for (let i = 1; i <= 3; i++) {
+    const diff = Number(ma[i]) - Number(mb[i]);
+    if (diff !== 0) return diff;
+  }
+  const pa = ma[4];
+  const pb = mb[4];
+  if (pa === pb) return 0;
+  if (pa === undefined) return 1;
+  if (pb === undefined) return -1;
+  return pa < pb ? -1 : 1;
+}
+
 /**
  * Check GitHub for the latest release tag.
  * Non-blocking, never throws — returns null latest on any failure.
@@ -65,7 +88,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     // tag_name is like "v0.0.5" — strip leading "v"
     const latest = data.tag_name.replace(/^v/, "");
     result.latest = latest;
-    result.updateAvailable = latest !== VERSION;
+    result.updateAvailable = compareVersions(latest, VERSION) > 0;
   } catch {
     // Network error, timeout, etc. — silently ignore
   }

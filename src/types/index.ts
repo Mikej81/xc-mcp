@@ -148,8 +148,20 @@ export interface TenantConfig {
   defaultNamespace?: string;
 }
 
+export type ServerMode = "local" | "hosted";
+
+export interface HostedConfig {
+  allowedDomains: string[];
+  maxSessions: number;
+  maxSessionsPerCredential: number;
+  /** A session must be idle at least this long before a session cap may evict it. */
+  evictMinIdleMs: number;
+}
+
 export interface ServerConfig {
   tenants: TenantConfig[];
   specsDir: string;
   indexPath: string;
+  mode: ServerMode;
+  hosted?: HostedConfig;
 }

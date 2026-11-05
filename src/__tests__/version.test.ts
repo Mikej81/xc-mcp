@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { VERSION, checkForUpdate } from "../lib/version.js";
+import { VERSION, checkForUpdate, compareVersions } from "../lib/version.js";
 
 describe("VERSION", () => {
   it("reads version from package.json", () => {
@@ -34,6 +34,39 @@ describe("checkForUpdate", () => {
     const result = await checkForUpdate();
     expect(result.latest).toBe(VERSION);
     expect(result.updateAvailable).toBe(false);
+  });
+
+  it("returns updateAvailable=false when remote version is older", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: "v0.0.1" }),
+    } as Response);
+
+    const result = await checkForUpdate();
+    expect(result.latest).toBe("0.0.1");
+    expect(result.updateAvailable).toBe(false);
+  });
+
+  it("returns updateAvailable=false when remote tag is not a version", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ tag_name: "nightly" }),
+    } as Response);
+
+    const result = await checkForUpdate();
+    expect(result.updateAvailable).toBe(false);
+  });
+
+  it.each([
+    ["0.6.0", "0.5.0", 1],
+    ["0.5.0", "0.6.0", -1],
+    ["0.10.0", "0.9.9", 1],
+    ["1.0.0", "0.99.99", 1],
+    ["0.6.0", "0.6.0", 0],
+    ["0.6.0", "0.6.0-rc.1", 1],
+    ["0.6.0-rc.1", "0.6.0", -1],
+  ])("compareVersions(%s, %s) = %i", (a, b, expected) => {
+    expect(Math.sign(compareVersions(a, b))).toBe(expected);
   });
 
   it("returns gracefully on network error", async () => {

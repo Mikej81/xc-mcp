@@ -52,4 +52,22 @@ describe("handleResolveSchemaRef", () => {
     expect(JSON.stringify(parsed)).toContain("_note");
     expect(JSON.stringify(parsed)).toContain("max depth");
   });
+  it.each(["../package.json", "/etc/passwd"])("rejects spec_file %s outside specsDir", async (spec_file) => {
+    const result = await handleResolveSchemaRef(
+      { specsDir: "/specs", indexPath: "" } as any,
+      { spec_file, ref: "#/components/schemas/Foo" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Invalid spec_file");
+    expect(result.content[0].text).not.toContain('"version"');
+  });
+
+  it("does not leak the underlying read error message", async () => {
+    const result = await handleResolveSchemaRef(
+      { specsDir: "/specs", indexPath: "" } as any,
+      { spec_file: "missing.json", ref: "#/components/schemas/Foo" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Failed to read spec "missing.json"');
+  });
 });
