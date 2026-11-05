@@ -188,12 +188,15 @@ If your team runs a shared server, use a remote entry with your own credentials 
       "serverUrl": "https://<host>/mcp",
       "headers": {
         "X-XC-Tenant-Url": "https://your-tenant.console.ves.volterra.io",
-        "X-XC-Tenant-Token": "YOUR_API_TOKEN_HERE"
+        "X-XC-Tenant-Token": "YOUR_API_TOKEN_HERE",
+        "X-API-Key": "YOUR_SHARED_SECRET"
       }
     }
   }
 }
 ```
+
+Leave out `X-API-Key` if the server has no shared secret (see [Shared-secret header](#shared-secret-header-x-api-key)). For several tenants, add one entry per tenant (see [Multiple tenants in hosted mode](#multiple-tenants-in-hosted-mode)).
 
 ### Verify
 
@@ -267,6 +270,8 @@ docker compose up -d
 
 ## Multiple Tenants
 
+This section covers local mode (stdio, or HTTP without `MCP_MODE=hosted`). For a shared hosted server, see [Multiple tenants in hosted mode](#multiple-tenants-in-hosted-mode).
+
 Use named environment variables to configure multiple tenants:
 
 ```bash
@@ -331,6 +336,26 @@ Clients hold the `GET /mcp` SSE stream open, so raise the idle timeout of any pr
 The check runs before body parsing, so failed requests never create a session. Failed auth events are logged at `warn` level with the peer IP and the expected header name (the supplied value is never logged).
 
 Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
+
+### Shared-secret header (`X-API-Key`)
+
+`X-API-Key` is not built into the server. It is the header name most deployments pick for `MCP_AUTH_HEADER_NAME`, and the one the examples in this README and `deploy/k8s/` use. Any header name works.
+
+- **What it protects.** The header decides who may talk to the server at all. It is not a user identity: everyone who connects shares the same value. In hosted mode each user still sends their own XC token in `X-XC-Tenant-Token`, and that token decides what they can do in XC.
+- **Where it applies.** Every request to `/mcp` in local and hosted mode, checked before the hosted credential headers. `/healthz`, `/readyz` and the `/metrics` listener don't check it, so probes and Prometheus need no secret.
+- **Matching.** The header name is case-insensitive (`x-api-key` matches `X-API-Key`). The value must match exactly and is compared in constant time.
+- **On failure.** A missing or wrong value gets 401 `{"error":"unauthorized"}` with no `reason` field. A 401 that carries a `reason` (such as `missing_token`) comes from the hosted credential check instead, which means the shared secret was accepted.
+- **Generating a value.** Use a long random string, for example `openssl rand -hex 32`, and inject it from a secret store, not the image or a committed file.
+- **Rotation.** The server accepts one value. To rotate, restart the server with the new value and update every client config. Clients still on the old value get 401 until they are updated.
+
+The header goes in each client config next to the other headers. For Claude Code:
+
+```bash
+claude mcp add --transport http f5-xc https://<host>/mcp \
+  --header "X-API-Key: <shared-secret>"
+```
+
+In JSON configs (Cursor, Antigravity, `.mcp.json`) add `"X-API-Key": "<shared-secret>"` to the `headers` object. If you chose a different `MCP_AUTH_HEADER_NAME`, use that name instead.
 
 ### Health checks and shutdown
 
@@ -428,12 +453,15 @@ On `initialize`, the server verifies the token with a `whoami` call to the tenan
 
 ### Client configuration
 
+The examples include `X-API-Key` for a server that sets `MCP_AUTH_HEADER_NAME=X-API-Key` (see [Shared-secret header](#shared-secret-header-x-api-key)). Leave that line out if the server has no shared secret, or use the header name it was configured with.
+
 Claude Code:
 
 ```bash
 claude mcp add --transport http f5-xc https://<host>/mcp \
   --header "X-XC-Tenant-Url: https://your-tenant.console.ves.volterra.io" \
-  --header "X-XC-Tenant-Token: <your-api-token>"
+  --header "X-XC-Tenant-Token: <your-api-token>" \
+  --header "X-API-Key: <shared-secret>"
 ```
 
 Cursor (`~/.cursor/mcp.json`):
@@ -445,7 +473,8 @@ Cursor (`~/.cursor/mcp.json`):
       "url": "https://<host>/mcp",
       "headers": {
         "X-XC-Tenant-Url": "https://your-tenant.console.ves.volterra.io",
-        "X-XC-Tenant-Token": "<your-api-token>"
+        "X-XC-Tenant-Token": "<your-api-token>",
+        "X-API-Key": "<shared-secret>"
       }
     }
   }
@@ -454,7 +483,65 @@ Cursor (`~/.cursor/mcp.json`):
 
 Antigravity: see [Setup: Google Antigravity](#setup-google-antigravity). It uses `serverUrl` and the same `headers` object.
 
-If your gateway also requires `MCP_AUTH_HEADER_NAME`, add that header to each config.
+### Multiple tenants in hosted mode
+
+A hosted session is bound to one tenant: the URL and token sent on `initialize`. The `XC_TENANT_<NAME>_*` variables and the `tenant` tool parameter don't apply. To work with several tenants, add one MCP server entry per tenant, each with its own name and headers. Each entry opens its own session.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http --scope user f5-xc-prod https://<host>/mcp \
+  --header "X-XC-Tenant-Url: https://prod-tenant.console.ves.volterra.io" \
+  --header "X-XC-Tenant-Token: <prod-api-token>" \
+  --header "X-XC-Read-Only: true" \
+  --header "X-API-Key: <shared-secret>"
+
+claude mcp add --transport http --scope user f5-xc-dev https://<host>/mcp \
+  --header "X-XC-Tenant-Url: https://dev-tenant.console.ves.volterra.io" \
+  --header "X-XC-Tenant-Token: <dev-api-token>" \
+  --header "X-XC-Tenant-Namespace: dev-apps" \
+  --header "X-API-Key: <shared-secret>"
+```
+
+The same setup as JSON, for `claude mcp add-json` or a project `.mcp.json`. Claude Code expands `${VAR}` in `headers`, so the tokens can come from your shell environment instead of the file:
+
+```json
+{
+  "mcpServers": {
+    "f5-xc-prod": {
+      "type": "http",
+      "url": "https://<host>/mcp",
+      "headers": {
+        "X-XC-Tenant-Url": "https://prod-tenant.console.ves.volterra.io",
+        "X-XC-Tenant-Token": "${XC_PROD_TOKEN}",
+        "X-XC-Read-Only": "true",
+        "X-API-Key": "${XC_MCP_SHARED_SECRET}"
+      }
+    },
+    "f5-xc-dev": {
+      "type": "http",
+      "url": "https://<host>/mcp",
+      "headers": {
+        "X-XC-Tenant-Url": "https://dev-tenant.console.ves.volterra.io",
+        "X-XC-Tenant-Token": "${XC_DEV_TOKEN}",
+        "X-XC-Tenant-Namespace": "dev-apps",
+        "X-API-Key": "${XC_MCP_SHARED_SECRET}"
+      }
+    }
+  }
+}
+```
+
+How this behaves:
+
+- **The model picks the tenant by picking the server.** Claude Code prefixes tool names with the server name (`mcp__f5-xc-prod__xc_list_resources`, `mcp__f5-xc-dev__xc_list_resources`), so name each entry after its tenant. Say which tenant you mean in the prompt, for example "list the LBs in prod".
+- **Settings are per entry.** `X-XC-Tenant-Namespace` and `X-XC-Read-Only` apply only to the entry that sends them. The example keeps prod read-only and dev writable.
+- **Each entry adds 18 tools to the model's context.** With many tenants that costs tokens on every turn. Add entries only for the tenants you use, and remove the rest with `claude mcp remove <name>`.
+- **Session caps count each entry separately.** `MCP_HOSTED_MAX_SESSIONS_PER_CREDENTIAL` is per tenant URL and token pair, so two tenants don't share a cap. Every entry counts toward `MCP_HOSTED_MAX_SESSIONS`.
+- **Tenant domains must be allowed.** Each tenant URL has to fall under `XC_HOSTED_ALLOWED_DOMAINS` on the server, or that entry gets 401 `url_not_allowed`.
+- **Don't commit tokens.** A `.mcp.json` with literal tokens or a literal shared secret must stay out of git. Use the `${VAR}` form, or keep the entries at user scope (`--scope user`), which lives in `~/.claude.json`.
+
+Cursor and Antigravity work the same way: one entry under `mcpServers` per tenant, each with its own `headers`.
 
 ### What changes for tools
 
