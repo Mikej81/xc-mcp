@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xc-mcp
+  # MCP uses long-lived SSE streams. Raise the proxy timeouts or the controller
+  # will cut streams after its default (60 s on NGINX). Example for the NGINX
+  # ingress controller:
+  # annotations:
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  # ingressClassName: <your-ingress-class>
+  tls:
+    - hosts:
+        - xc-mcp.example.com
+      secretName: xc-mcp-tls
+  rules:
+    - host: xc-mcp.example.com
+      http:
+        paths:
+          # Only /mcp is exposed. /metrics, /healthz and /readyz stay in-cluster.
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: xc-mcp
+                port:
+                  name: http

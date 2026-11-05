@@ -7,6 +7,7 @@
  */
 import crypto from "node:crypto";
 import type { TenantConfig } from "../types/index.js";
+import { callApi } from "./api-client.js";
 
 export interface BlindfoldParams {
   policyId: number;
@@ -27,47 +28,34 @@ const PUBLIC_KEY_URL = "/api/secret_management/get_public_key";
 export async function fetchBlindfoldParams(
   config: TenantConfig,
 ): Promise<BlindfoldParams> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  if (config.apiToken) {
-    headers.Authorization = `APIToken ${config.apiToken}`;
-  } else if (!config.p12Dispatcher) {
+  if (!config.apiToken && !config.p12Dispatcher) {
     throw new Error(
       `Tenant "${config.name}" has no auth configured (neither API token nor loaded P12 dispatcher).`,
     );
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-
-  const fetchInit: Parameters<typeof fetch>[1] = {
-    headers,
-    signal: controller.signal,
-    ...(config.p12Dispatcher ? { dispatcher: config.p12Dispatcher } : {}),
-  };
-
-  try {
+  // Through callApi so a 401 sets the expired-token hint and both GETs are
+  // counted in the upstream metrics. GETs are never audited.
   const [policyRes, pubKeyRes] = await Promise.all([
-    fetch(new URL(POLICY_URL, config.tenantUrl).toString(), fetchInit),
-    fetch(new URL(PUBLIC_KEY_URL, config.tenantUrl).toString(), fetchInit),
+    callApi(config, "GET", POLICY_URL, { skipTruncation: true }),
+    callApi(config, "GET", PUBLIC_KEY_URL, { skipTruncation: true }),
   ]);
 
-  if (!policyRes.ok) {
+  if (policyRes.status < 200 || policyRes.status >= 300) {
     throw new Error(
       `Failed to fetch policy document: ${policyRes.status} ${policyRes.statusText}`,
     );
   }
-  if (!pubKeyRes.ok) {
+  if (pubKeyRes.status < 200 || pubKeyRes.status >= 300) {
     throw new Error(
       `Failed to fetch public key: ${pubKeyRes.status} ${pubKeyRes.statusText}`,
     );
   }
 
-  const policyData = (await policyRes.json()) as {
+  const policyData = policyRes.body as {
     data: { policy_id: number; tenant: string };
   };
-  const pubKeyData = (await pubKeyRes.json()) as {
+  const pubKeyData = pubKeyRes.body as {
     data: { modulus_base64: string; public_exponent_base64: string };
   };
 
@@ -78,9 +66,6 @@ export async function fetchBlindfoldParams(
     modulusBase64: pubKeyData.data.modulus_base64,
     exponentBase64: pubKeyData.data.public_exponent_base64,
   };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 // Constants matching the PowerShell implementation

@@ -4,7 +4,9 @@ import type { ServerRequest, ServerNotification } from "@modelcontextprotocol/sd
 import { z, type ZodRawShape } from "zod";
 
 import { resolveTenant, resolveNamespace } from "./lib/tenant.js";
-import { parseCredentialHeaders, DEFAULT_ALLOWED_DOMAINS } from "./lib/hosted.js";
+import { parseCredentialHeaders, credentialFingerprint, DEFAULT_ALLOWED_DOMAINS } from "./lib/hosted.js";
+import { runInCallContext, authFailureHint, type CallContext } from "./lib/call-context.js";
+import { toolCalls } from "./lib/metrics.js";
 import type { OperationsIndex } from "./types/index.js";
 import type { ServerConfig, TenantConfig } from "./types/index.js";
 import { handleDiscover } from "./tools/discover.js";
@@ -12,7 +14,7 @@ import { handleOperationDetails } from "./tools/operation-details.js";
 import { handleCallApi } from "./tools/call-api.js";
 import { handleListNamespaces } from "./tools/list-namespaces.js";
 import { handleListResources } from "./tools/list-resources.js";
-import { handleCreateCert } from "./tools/create-cert.js";
+import { handleCreateCert, CERT_DOMAIN_SCHEMA } from "./tools/create-cert.js";
 import { handlePatchResource } from "./tools/patch-resource.js";
 import { handleWaitReady } from "./tools/wait-ready.js";
 import { handleDiffResource } from "./tools/diff-resource.js";
@@ -91,6 +93,29 @@ export function withTenant(
   return result;
 }
 
+/** Best-effort per-call context; tenant resolution failures leave the tenant fields undefined. */
+function buildCallContext(config: ServerConfig, tool: string, params: unknown, extra: Extra | undefined): CallContext {
+  const ctx: CallContext = {
+    tool,
+    mode: config.mode === "hosted" ? "hosted" : "local",
+    sessionId: extra?.sessionId,
+    sawAuthFailure: false,
+  };
+  try {
+    const tenant = config.mode === "hosted"
+      ? hostedCallerTenant(config, extra)
+      : resolveTenant(config.tenants, (params as { tenant?: string } | undefined)?.tenant);
+    if (typeof tenant !== "string") {
+      ctx.tenant = tenant;
+      ctx.tenantHost = new URL(tenant.tenantUrl).hostname;
+      ctx.callerId = config.mode === "hosted" ? credentialFingerprint(tenant).slice(0, 8) : tenant.name;
+    }
+  } catch {
+    // leave fields undefined
+  }
+  return ctx;
+}
+
 /**
  * Register tools with their TOOL_POLICIES annotations and read-only enforcement.
  * MCP_READ_ONLY hides mutating tools entirely (xc_call_api stays, GET only).
@@ -109,14 +134,31 @@ function makeToolRegistrar(server: McpServer, config: ServerConfig) {
     const desc = config.readOnly && name === GENERIC_API_TOOL
       ? `${description} Server is read-only: only GET is allowed.`
       : description;
-    const guarded = ((params: unknown, extra: Extra) => {
+    const run = (params: unknown, extra: Extra): ToolResult | Promise<ToolResult> => {
       const readOnly = config.readOnly === true ||
         isReadOnlyHeader(extra?.requestInfo?.headers?.[READ_ONLY_HEADER]);
       if (readOnly) {
         const refusal = readOnlyRefusal(name, params);
         if (refusal) return { content: [{ type: "text" as const, text: refusal }], isError: true };
       }
-      return (cb as unknown as (p: unknown, e: Extra) => unknown)(params, extra);
+      const ctx = buildCallContext(config, name, params, extra);
+      return runInCallContext(ctx, async () => {
+        const result = await (cb as unknown as (p: unknown, e: Extra) => Promise<ToolResult>)(params, extra);
+        if (ctx.sawAuthFailure && result && Array.isArray(result.content)) {
+          result.content.push({ type: "text", text: authFailureHint(ctx) });
+        }
+        return result;
+      });
+    };
+    const guarded = (async (params: unknown, extra: Extra) => {
+      let outcome: "ok" | "error" = "error";
+      try {
+        const result = await run(params, extra);
+        if (!result?.isError) outcome = "ok";
+        return result;
+      } finally {
+        toolCalls.inc({ tool: name, outcome });
+      }
     }) as unknown as ToolCallback<A>;
     // With MCP_READ_ONLY, xc_call_api only runs GET, so it advertises itself as read-only.
     const annotations = config.readOnly && name === GENERIC_API_TOOL
@@ -279,7 +321,7 @@ function registerTools(server: McpServer, config: ServerConfig, index: Operation
     {
       name: z.string().describe("Certificate object name"),
       namespace: z.string().describe("Namespace"),
-      domain: z.string().describe("Domain for the CN (e.g. mcp.myedgedemo.com)"),
+      domain: CERT_DOMAIN_SCHEMA.describe("Hostname for the CN, optionally *.-prefixed (e.g. mcp.myedgedemo.com)"),
       tenant: z.string().optional().describe("Tenant name (required if multiple tenants)"),
     },
     async (params, extra) => {
@@ -621,7 +663,7 @@ function registerPrompts(server: McpServer, config: ServerConfig) {
     }),
   );
 
-  server.prompt(
+  if (!config.readOnly) server.prompt(
     "deploy-https-lb",
     "Deploy an HTTPS load balancer with WAF, origin pool, and certificate",
     {

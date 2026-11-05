@@ -168,4 +168,6 @@ export interface ServerConfig {
   readOnly?: boolean;
   /** MCP_SHUTDOWN_DRAIN_SECONDS in ms: how long /readyz reports 503 before the server stops accepting. */
   shutdownDrainMs?: number;
+  /** MCP_METRICS_PORT: serve Prometheus /metrics on this port (HTTP transport only). Unset = off. */
+  metricsPort?: number;
 }

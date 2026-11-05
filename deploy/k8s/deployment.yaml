@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xc-mcp
+  labels:
+    app: xc-mcp
+spec:
+  # One replica. Hosted-mode sessions live in process memory, so more than one
+  # replica needs sticky sessions on the Mcp-Session-Id header (see README.md).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xc-mcp
+  template:
+    metadata:
+      labels:
+        app: xc-mcp
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Drain (15 s) + close timeout (10 s) = 25 s, which fits inside 30 s.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: xc-mcp
+          image: ghcr.io/mikej81/xc-mcp:0.6.1
+          ports:
+            - name: http
+              containerPort: 3000
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: MCP_TRANSPORT
+              value: "http"
+            - name: MCP_MODE
+              value: "hosted"
+            # Report not-ready for 15 s after SIGTERM so the endpoint is removed
+            # from the Service before the server stops accepting connections.
+            # Keep it a few seconds above the readiness periodSeconds (10).
+            - name: MCP_SHUTDOWN_DRAIN_SECONDS
+              value: "15"
+            - name: MCP_METRICS_PORT
+              value: "9090"
+            # Optional: tenant domain suffixes users may connect to. The default
+            # is .console.ves.volterra.io. Add FedRAMP or other domains here.
+            # - name: XC_HOSTED_ALLOWED_DOMAINS
+            #   value: ".console.ves.volterra.io"
+            # Optional but recommended when the endpoint is reachable from outside
+            # the cluster: require a shared secret header on every /mcp request.
+            # Both variables must be set together. Create the Secret first, for
+            # example:
+            #   kubectl create secret generic xc-mcp-auth \
+            #     --from-literal=value="$(openssl rand -hex 32)"
+            # - name: MCP_AUTH_HEADER_NAME
+            #   value: "X-API-Key"
+            # - name: MCP_AUTH_HEADER_VALUE
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: xc-mcp-auth
+            #       key: value
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            # The root filesystem is read-only. xc_create_cert writes its key
+            # and cert to a temp dir under /tmp, so /tmp is a memory-backed
+            # emptyDir (see volumes below).
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

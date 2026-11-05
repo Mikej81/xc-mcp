@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { join } from "node:path";
 import { createHttpHandler, createShutdown } from "../http.js";
 import { loadIndex } from "../lib/spec-index.js";
@@ -6,6 +6,20 @@ import { buildServerConfig } from "../index.js";
 import { TOOL_POLICIES, isReadOnlyHeader } from "../lib/tool-policy.js";
 import type { ServerConfig } from "../types/index.js";
 import { startTestServer, mcpRequest } from "./helpers/mcp-client.js";
+import { renderMetrics, resetMetrics } from "../lib/metrics.js";
+import { callApi } from "../lib/api-client.js";
+
+vi.mock("node:child_process", async () => {
+  const { writeFileSync } = await import("node:fs");
+  return {
+    execFileSync: vi.fn((_file: string, args: string[]) => {
+      // Stand-in for openssl req: write a key and cert to the given paths.
+      writeFileSync(args[args.indexOf("-keyout") + 1], "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n");
+      writeFileSync(args[args.indexOf("-out") + 1], "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----\n");
+      return Buffer.alloc(0);
+    }),
+  };
+});
 
 vi.mock("../lib/version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/version.js")>();
@@ -81,13 +95,18 @@ async function session(port: number, headers: Record<string, string> = {}) {
 
 const prevLevel = process.env.MCP_LOG_LEVEL;
 const upstream: Array<{ method: string; path: string }> = [];
+let upstreamStatus = 200;
+let whoamiStatus = 200;
+let upstreamFail: "network" | "timeout" | undefined;
 
 beforeAll(() => {
   process.env.MCP_LOG_LEVEL = "error";
   vi.stubGlobal("fetch", vi.fn(async (input: unknown, init?: { method?: string }) => {
     const u = new URL(String(input));
+    if (upstreamFail === "network") throw new TypeError("fetch failed");
+    if (upstreamFail === "timeout") throw Object.assign(new Error("aborted"), { name: "AbortError" });
     if (u.pathname !== "/api/web/custom/namespaces/system/whoami") upstream.push({ method: init?.method ?? "GET", path: u.pathname });
-    return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ items: [] }), { status: u.pathname === "/api/web/custom/namespaces/system/whoami" ? whoamiStatus : upstreamStatus, headers: { "content-type": "application/json" } });
   }));
 });
 
@@ -315,5 +334,392 @@ describe("read-only mode", () => {
       await s.close();
       await s.stop();
     }
+  });
+});
+
+describe("expired-token hint", () => {
+  const callWith = async (config: ServerConfig, status: number, headers: Record<string, string> = {}) => {
+    const s = await start(config);
+    upstreamStatus = status;
+    try {
+      const sess = await session(s.port, headers);
+      return await sess.call("xc_list_namespaces", {});
+    } finally {
+      upstreamStatus = 200;
+      await s.close();
+      await s.stop();
+    }
+  };
+
+  it("local 401 appends one hint naming XC_API_TOKEN", async () => {
+    const plain = await callWith(localConfig(), 403);
+    const r = await callWith(localConfig(), 401);
+    expect(r.content.length).toBe(plain.content.length + 1);
+    expect(r.content[r.content.length - 1].text).toContain("XC_API_TOKEN");
+  });
+
+  it("xc_create_cert: a 401 on the blindfold policy fetch adds the hint and a GET 4xx upstream sample", async () => {
+    resetMetrics();
+    const s = await start(localConfig());
+    upstreamStatus = 401;
+    try {
+      const sess = await session(s.port);
+      const r = await sess.call("xc_create_cert", { name: "c1", namespace: "default", domain: "app.example.com" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("Failed to fetch policy document: 401");
+      expect(r.content[r.content.length - 1].text).toContain("XC_API_TOKEN");
+      expect(renderMetrics()).toMatch(/xc_mcp_upstream_requests_total\{tool="xc_create_cert",method="GET",status_class="4xx"\} [12]\n/);
+    } finally {
+      upstreamStatus = 200;
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("local 403 and 200 add no hint", async () => {
+    for (const status of [403, 200]) {
+      const r = await callWith(localConfig(), status);
+      expect(r.content.some((c) => c.text.includes("XC rejected the API token"))).toBe(false);
+    }
+  });
+
+  it("hosted 401 names X-XC-Tenant-Token and not the token", async () => {
+    const r = await callWith(hostedConfig(), 401, { "x-xc-tenant-url": ACME, "x-xc-tenant-token": "hosted-secret-token" });
+    const text = r.content.map((c) => c.text).join("\n");
+    expect(text).toContain("X-XC-Tenant-Token");
+    expect(text).not.toContain("hosted-secret-token");
+  });
+});
+
+describe("metrics instrumentation", () => {
+  const TOKEN = "metrics-secret-token";
+  const creds = (token = TOKEN) => ({ "x-xc-tenant-url": ACME, "x-xc-tenant-token": token });
+  const hostedWith = (h: Partial<NonNullable<ServerConfig["hosted"]>>): ServerConfig => {
+    const c = hostedConfig();
+    return { ...c, hosted: { ...c.hosted!, ...h } };
+  };
+  const metrics = () => renderMetrics();
+  const expectNoSecrets = () => {
+    const text = metrics();
+    expect(text).not.toContain("acme");
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain("/api/");
+  };
+
+  beforeEach(() => {
+    resetMetrics();
+    whoamiStatus = 200;
+    upstreamStatus = 200;
+    upstreamFail = undefined;
+  });
+
+  /** For tests whose refusals produce 5xx access-log lines at error level. */
+  const muteStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("the MCP port does not serve /metrics", async () => {
+    const s = await start(localConfig());
+    try {
+      expect((await mcpRequest(s.port, { method: "GET", path: "/metrics" })).status).toBe(404);
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("local session and one tool call move session, tool and upstream counters", async () => {
+    const s = await start(localConfig());
+    try {
+      const sess = await session(s.port);
+      expect(metrics()).toContain("xc_mcp_sessions_active 1");
+      const r = await sess.call("xc_list_namespaces", {});
+      expect(r.isError).toBeFalsy();
+      const text = metrics();
+      expect(text).toContain("xc_mcp_sessions_created_total 1");
+      expect(text).toContain('xc_mcp_tool_calls_total{tool="xc_list_namespaces",outcome="ok"} 1');
+      expect(text).toContain('xc_mcp_upstream_requests_total{tool="xc_list_namespaces",method="GET",status_class="2xx"} 1');
+      expect(text).toContain('xc_mcp_upstream_request_duration_seconds_count{tool="xc_list_namespaces",method="GET"} 1');
+      expectNoSecrets();
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+    expect(metrics()).toContain("xc_mcp_sessions_active 0");
+  });
+
+  it("tool calls that return isError count as outcome=error (including read-only refusals)", async () => {
+    const s = await start(localConfig(true));
+    try {
+      const sess = await session(s.port);
+      const r = await sess.call("xc_call_api", { method: "DELETE", path: "/api/config/namespaces/default/http_loadbalancers/x" });
+      expect(r.isError).toBe(true);
+      expect(metrics()).toContain('xc_mcp_tool_calls_total{tool="xc_call_api",outcome="error"} 1');
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("upstream network failures and timeouts outside a tool call count under tool=none", async () => {
+    const tenant = { name: "default", apiToken: TOKEN, tenantUrl: ACME };
+    upstreamFail = "network";
+    expect((await callApi(tenant, "GET", "/api/web/namespaces")).status).toBe(0);
+    upstreamFail = "timeout";
+    expect((await callApi(tenant, "post", "/api/web/namespaces")).status).toBe(408);
+    const text = metrics();
+    expect(text).toContain('xc_mcp_upstream_requests_total{tool="none",method="GET",status_class="network"} 1');
+    expect(text).toContain('xc_mcp_upstream_requests_total{tool="none",method="POST",status_class="timeout"} 1');
+    expectNoSecrets();
+  });
+
+  it("hosted bad token: invalid_credentials auth failure and a tool=none 4xx upstream request", async () => {
+    whoamiStatus = 401;
+    const s = await start(hostedConfig());
+    try {
+      const init = await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() });
+      expect(init.status).toBe(401);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_auth_failures_total{reason="invalid_credentials"} 1');
+      expect(text).toContain('xc_mcp_upstream_requests_total{tool="none",method="GET",status_class="4xx"} 1');
+      expect(text).toContain("\nxc_mcp_sessions_created_total 0\n");
+      expectNoSecrets();
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("hosted unreachable tenant: tenant_unreachable", async () => {
+    muteStderr();
+    whoamiStatus = 500;
+    const s = await start(hostedConfig());
+    try {
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() })).status).toBe(502);
+      expect(metrics()).toContain('xc_mcp_auth_failures_total{reason="tenant_unreachable"} 1');
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("hosted header failures count with the parseCredentialHeaders reason", async () => {
+    const s = await start(hostedConfig());
+    try {
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody })).status).toBe(401);
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: { "x-xc-tenant-url": ACME } })).status).toBe(401);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_auth_failures_total{reason="missing_tenant_url"} 1');
+      expect(text).toContain('xc_mcp_auth_failures_total{reason="missing_token"} 1');
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("hosted session reused with other credentials: session_credential_mismatch", async () => {
+    const s = await start(hostedConfig());
+    try {
+      const init = await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() });
+      const sid = init.headers["mcp-session-id"] as string;
+      const res = await mcpRequest(s.port, {
+        method: "POST",
+        headers: { ...creds("other-token"), "mcp-session-id": sid },
+        body: { jsonrpc: "2.0", id: 99, method: "tools/list" },
+      });
+      expect(res.status).toBe(403);
+      expect(metrics()).toContain('xc_mcp_auth_failures_total{reason="session_credential_mismatch"} 1');
+      expectNoSecrets();
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("MCP_AUTH_HEADER gate failures map to auth_header_missing / auth_header_mismatch", async () => {
+    const s = await start(localConfig(), { enabled: true, headerName: "x-mcp-auth", headerValue: "gate-secret" });
+    try {
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody })).status).toBe(401);
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: { "x-mcp-auth": "wrong" } })).status).toBe(401);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_auth_failures_total{reason="auth_header_missing"} 1');
+      expect(text).toContain('xc_mcp_auth_failures_total{reason="auth_header_mismatch"} 1');
+      expect(text).not.toContain("gate-secret");
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("cap refusals count per_credential_cap and global_cap", async () => {
+    muteStderr();
+    const s = await start(hostedWith({ maxSessionsPerCredential: 1, maxSessions: 2, evictMinIdleMs: 3_600_000 }));
+    try {
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() })).status).toBe(200);
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() })).status).toBe(429);
+      expect(metrics()).toContain('xc_mcp_session_refusals_total{reason="per_credential_cap"} 1');
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds("t2") })).status).toBe(200);
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds("t3") })).status).toBe(503);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_session_refusals_total{reason="global_cap"} 1');
+      expect(text).toContain("xc_mcp_sessions_active 2");
+      expectNoSecrets();
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("an initialize the transport rejects releases its slot and sessions_active returns to 0", async () => {
+    const s = await start(localConfig());
+    try {
+      const bad = await mcpRequest(s.port, { method: "POST", body: initBody, headers: { Accept: "text/plain" } });
+      expect(bad.status).toBe(406);
+      const text = metrics();
+      expect(text).toContain("\nxc_mcp_sessions_active 0\n");
+      expect(text).toContain("\nxc_mcp_sessions_created_total 0\n");
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("refusal during shutdown counts shutting_down", async () => {
+    muteStderr();
+    const s = await start(localConfig());
+    try {
+      await s.close();
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody })).status).toBe(503);
+      expect(metrics()).toContain('xc_mcp_session_refusals_total{reason="shutting_down"} 1');
+    } finally {
+      await s.stop();
+    }
+  });
+
+  it("cap evictions count per_credential_cap and global_cap; sessions_active tracks the registry", async () => {
+    const s = await start(hostedWith({ maxSessionsPerCredential: 1, maxSessions: 1, evictMinIdleMs: 0 }));
+    try {
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() })).status).toBe(200);
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds() })).status).toBe(200);
+      expect(metrics()).toContain('xc_mcp_session_evictions_total{reason="per_credential_cap"} 1');
+      expect((await mcpRequest(s.port, { method: "POST", body: initBody, headers: creds("t2") })).status).toBe(200);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_session_evictions_total{reason="global_cap"} 1');
+      expect(text).toContain("xc_mcp_sessions_active 1");
+      expect(text).toContain("xc_mcp_sessions_created_total 3");
+    } finally {
+      await s.close();
+      await s.stop();
+    }
+  });
+
+  it("idle sweep counts reason=idle and updates sessions_active", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let clock = 1_000_000;
+    const h = createHttpHandler(localConfig(), loadIndex(indexPath), { enabled: false }, { now: () => clock });
+    const srv = await startTestServer(h.handler);
+    try {
+      await session(srv.port);
+      expect(metrics()).toContain("xc_mcp_sessions_active 1");
+      clock += 31 * 60 * 1000;
+      vi.advanceTimersByTime(60_000);
+      const text = metrics();
+      expect(text).toContain('xc_mcp_session_evictions_total{reason="idle"} 1');
+      expect(text).toContain("xc_mcp_sessions_active 0");
+    } finally {
+      vi.useRealTimers();
+      await h.close();
+      await srv.stop();
+    }
+  });
+
+  it("buildServerConfig parses MCP_METRICS_PORT", () => {
+    const paths = { specsDir, indexPath };
+    const base = { MCP_TRANSPORT: "http", MCP_MODE: "hosted" };
+    expect(buildServerConfig({ ...base }, paths).metricsPort).toBeUndefined();
+    expect(buildServerConfig({ ...base, MCP_METRICS_PORT: "9090" }, paths).metricsPort).toBe(9090);
+    expect(buildServerConfig({ ...base, MCP_METRICS_PORT: "65535" }, paths).metricsPort).toBe(65535);
+    expect(() => buildServerConfig({ ...base, MCP_METRICS_PORT: "3000" }, paths)).toThrow(/MCP_METRICS_PORT.*MCP_HTTP_PORT/);
+    expect(() => buildServerConfig({ ...base, MCP_HTTP_PORT: "8080", MCP_METRICS_PORT: "8080" }, paths)).toThrow(/MCP_METRICS_PORT.*MCP_HTTP_PORT/);
+    expect(buildServerConfig({ ...base, MCP_HTTP_PORT: "8080", MCP_METRICS_PORT: "3000" }, paths).metricsPort).toBe(3000);
+    for (const bad of ["0", "70000", "abc", "-1", "90.5", "65536"]) {
+      expect(() => buildServerConfig({ ...base, MCP_METRICS_PORT: bad }, paths), bad).toThrow(/MCP_METRICS_PORT/);
+    }
+  });
+});
+
+describe("small fixes (0.6.1)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const listPrompts = async (port: number) => {
+    const init = await mcpRequest(port, { method: "POST", body: initBody });
+    const h = { "mcp-session-id": init.headers["mcp-session-id"] as string, "mcp-protocol-version": "2025-03-26" };
+    await mcpRequest(port, { method: "POST", headers: h, body: { jsonrpc: "2.0", method: "notifications/initialized" } });
+    const r = await mcpRequest(port, { method: "POST", headers: h, body: { jsonrpc: "2.0", id: nextId++, method: "prompts/list" } });
+    return (r.json as { result: { prompts: Array<{ name: string }> } }).result.prompts.map((p) => p.name);
+  };
+
+  it("deploy-https-lb prompt is hidden under MCP_READ_ONLY and present otherwise", async () => {
+    const ro = await start(localConfig(true));
+    try {
+      const names = await listPrompts(ro.port);
+      expect(names).not.toContain("deploy-https-lb");
+      expect(names).toContain("audit-namespace");
+    } finally {
+      await ro.close();
+      await ro.stop();
+    }
+    const rw = await start(localConfig());
+    try {
+      expect(await listPrompts(rw.port)).toContain("deploy-https-lb");
+    } finally {
+      await rw.close();
+      await rw.stop();
+    }
+  });
+
+  it("only the shutting_down initialize refusal drops to info; other 5xx stay error", async () => {
+    const prev = process.env.MCP_LOG_LEVEL;
+    process.env.MCP_LOG_LEVEL = "info";
+    const lines: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((c: unknown) => { lines.push(String(c)); return true; });
+    const accessLevel = async (status: number) => {
+      await vi.waitFor(() => {
+        const found = lines.flatMap((l) => l.split("\n")).filter((l) => l.includes('"evt":"request"')).map((l) => JSON.parse(l)).find((l) => l.status === status);
+        expect(found).toBeDefined();
+      });
+      return lines.flatMap((l) => l.split("\n")).filter((l) => l.includes('"evt":"request"')).map((l) => JSON.parse(l)).find((l) => l.status === status).level;
+    };
+    try {
+      const s = await start(localConfig());
+      try {
+        await s.close();
+        expect((await mcpRequest(s.port, { method: "POST", body: initBody })).status).toBe(503);
+        expect(await accessLevel(503)).toBe("info");
+      } finally {
+        await s.stop();
+      }
+      lines.length = 0;
+      whoamiStatus = 500;
+      const h = await start(hostedConfig());
+      try {
+        const res = await mcpRequest(h.port, { method: "POST", body: initBody, headers: { "x-xc-tenant-url": ACME, "x-xc-tenant-token": "tok" } });
+        expect(res.status).toBe(502);
+        expect(await accessLevel(502)).toBe("error");
+      } finally {
+        whoamiStatus = 200;
+        await h.close();
+        await h.stop();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.MCP_LOG_LEVEL;
+      else process.env.MCP_LOG_LEVEL = prev;
+    }
+  });
+
+  it("xc_list_tenants is read-only and open-world", () => {
+    expect(TOOL_POLICIES.xc_list_tenants.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
   });
 });

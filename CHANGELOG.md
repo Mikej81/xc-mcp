@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.1 -- 2026-11-05
+
+### Metrics, audit log and a Kubernetes example
+
+Makes hosted mode easier to operate. No breaking changes: metrics are off unless `MCP_METRICS_PORT` is set, and the audit log adds lines to the existing stderr log.
+
+- **Security: shell injection in `xc_create_cert`** -- `xc_create_cert` passed the `domain` argument to a shell, so a crafted value could run commands on the server. In hosted mode, any caller with a valid token could do this. In local mode, whatever controls the model's tool calls could, including a prompt injection in content the model reads. Affects 0.0.9 through 0.6.0. The server now runs `openssl` without a shell, and both the tool schema and the handler reject any `domain` that is not a DNS hostname (an optional leading `*.` is allowed, 253 characters at most).
+- **Expired-token hint** -- when XC answers 401 during a tool call, the result gets one extra text block telling the user to update the token. Hosted mode names `X-XC-Tenant-Token` and says to reconnect, because the session stays bound to the old token. Local mode names `XC_API_TOKEN`, `XC_TENANT_<NAME>_TOKEN` or the P12 certificate and says to restart the server. The existing result and `isError` are unchanged. A 403 gets no hint.
+- **Prometheus metrics** -- set `MCP_METRICS_PORT` (1-65535, HTTP transport only) to serve `GET /metrics` from a second listener. Metrics cover build info, active and created sessions, session refusals and evictions by reason, auth failures by reason, tool calls by outcome, and upstream XC requests and latency by tool and method. Labels come from fixed sets, with no tenant, path or user values. The listener has no authentication and must stay off the public path. With stdio the server logs `metrics_disabled_stdio` and ignores the port. No new dependency.
+- **Metrics port collision check** -- startup fails if `MCP_METRICS_PORT` equals `MCP_HTTP_PORT`, is not an integer from 1 to 65535, or cannot be bound.
+- **Audit log** -- every non-`GET` request that a state-changing tool sends to XC writes one `audit` log line with the tool, method, path without query string, namespace, resource type and name, upstream status, duration, session id prefix, `caller_id` and tenant host. In hosted mode `caller_id` is the first 8 hex characters of the credential fingerprint; in local mode it is the tenant name. Failed writes are logged. Read-only tools that use `POST`, such as `xc_query_access_logs`, are not. Bodies, query strings, headers and tokens are never logged.
+- **Kubernetes example** -- `deploy/k8s/` has a Deployment, Service and Ingress for hosted mode, with liveness and readiness probes, a 15 second shutdown drain, a non-root read-only container, resource limits, a metrics port on the ClusterIP Service only, and a README.
+- **Fix: `xc_create_cert` in the container** -- the runtime image now includes `openssl`, which `xc_create_cert` needs. The Kubernetes Deployment mounts a 16Mi memory-backed `emptyDir` at `/tmp`, because the tool writes its key pair to a temp directory and the root filesystem is read-only.
+- **Fix: blindfold requests count as upstream calls** -- the policy and public-key `GET`s that `xc_create_cert` and `xc_call_api` make before encrypting a private key now go through the shared API client, so both requests show up in the upstream metrics. For `xc_create_cert`, a 401 there also adds the expired-token hint; `xc_call_api` does not add it yet on this path.
+- **Fix: audit lines ignore `MCP_LOG_LEVEL`** -- audit lines are written at level `info` even when `MCP_LOG_LEVEL` is `warn` or `error`. Before this, those levels dropped them. A namespace `cascade_delete` is logged with `action: "cascade_delete"`.
+- **Fix: `deploy-https-lb` prompt** -- no longer registered when `MCP_READ_ONLY=true`, since it led the model toward hidden tools.
+- **Fix: shutdown log level** -- an `initialize` refused during shutdown (503 `shutting_down`) is logged at `info` instead of `error`.
+- **Fix: `xc_list_tenants` annotation** -- now `openWorldHint: true`, because it calls GitHub for the update check in local mode.
+- **Unit tests** -- 516 tests across 42 test files (up from 441/38).
+- No removed tools and no breaking changes. Drop-in upgrade from 0.6.0.
+
 ## 0.6.0 -- 2026-11-05
 
 ### Hosted mode and two security fixes

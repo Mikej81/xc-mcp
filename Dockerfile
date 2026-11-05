@@ -19,6 +19,9 @@ RUN npx tsc
 # --- Runtime stage ---
 FROM node:20-alpine
 
+# xc_create_cert runs openssl to generate the key pair.
+RUN apk add --no-cache openssl
+
 RUN addgroup -g 1001 -S appuser && adduser -S appuser -u 1001
 
 WORKDIR /app

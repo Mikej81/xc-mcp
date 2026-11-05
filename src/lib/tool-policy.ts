@@ -20,6 +20,10 @@ const xcRead: ToolPolicy = {
   annotations: { readOnlyHint: true, openWorldHint: true },
   mutates: false,
 };
+const listTenants: ToolPolicy = {
+  annotations: { readOnlyHint: true, openWorldHint: true },
+  mutates: false,
+};
 const write = (destructiveHint: boolean, idempotentHint: boolean): ToolPolicy => ({
   annotations: { readOnlyHint: false, destructiveHint, idempotentHint, openWorldHint: true },
   mutates: true,
@@ -29,7 +33,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   xc_discover_apis: localRead,
   xc_get_operation_details: localRead,
   xc_resolve_schema_ref: localRead,
-  xc_list_tenants: localRead,
+  xc_list_tenants: listTenants,
   xc_list_namespaces: xcRead,
   xc_list_resources: xcRead,
   xc_search_resources: xcRead,

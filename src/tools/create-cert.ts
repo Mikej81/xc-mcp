@@ -1,10 +1,22 @@
-import { execSync } from "node:child_process";
-import { readFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import type { TenantConfig } from "../types/index.js";
 import { callApi } from "../lib/api-client.js";
 import { fetchBlindfoldParams, blindfoldEncrypt } from "../lib/blindfold.js";
+
+const LABEL = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?";
+/** DNS hostname, optionally with one leading "*." wildcard label. */
+const DOMAIN_RE = new RegExp(`^(?:\\*\\.)?(?:${LABEL}\\.)*${LABEL}$`);
+
+/** Zod schema for the xc_create_cert `domain` argument. */
+export const CERT_DOMAIN_SCHEMA = z.string().max(253).regex(DOMAIN_RE, "domain must be a DNS hostname");
+
+export function isValidCertDomain(domain: string): boolean {
+  return domain.length <= 253 && DOMAIN_RE.test(domain);
+}
 
 export interface CreateCertParams {
   name: string;
@@ -22,14 +34,24 @@ export async function handleCreateCert(
   config: TenantConfig,
   params: CreateCertParams,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+  // Defence in depth: the zod schema checks this too, but never let an
+  // unchecked value reach the openssl argument list.
+  if (typeof params.domain !== "string" || !isValidCertDomain(params.domain)) {
+    return {
+      content: [{ type: "text", text: "Invalid domain: must be a DNS hostname (optionally starting with \"*.\"), at most 253 characters." }],
+      isError: true,
+    };
+  }
+
   const tmpDir = mkdtempSync(join(tmpdir(), "xc-cert-"));
   const keyPath = join(tmpDir, "key.pem");
   const certPath = join(tmpDir, "cert.pem");
 
   try {
-    // Generate self-signed cert
-    execSync(
-      `openssl req -x509 -newkey rsa:2048 -keyout ${keyPath} -out ${certPath} -days 365 -nodes -subj "/CN=${params.domain}"`,
+    // Generate self-signed cert. execFileSync runs openssl without a shell.
+    execFileSync(
+      "openssl",
+      ["req", "-x509", "-newkey", "rsa:2048", "-keyout", keyPath, "-out", certPath, "-days", "365", "-nodes", "-subj", `/CN=${params.domain}`],
       { stdio: "pipe" },
     );
 
@@ -88,8 +110,6 @@ export async function handleCreateCert(
     };
   } finally {
     // Clean up temp files
-    try { unlinkSync(keyPath); } catch { /* ignore */ }
-    try { unlinkSync(certPath); } catch { /* ignore */ }
-    try { execSync(`rmdir ${tmpDir}`, { stdio: "pipe" }); } catch { /* ignore */ }
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }

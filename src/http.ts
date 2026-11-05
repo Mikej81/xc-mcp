@@ -11,6 +11,8 @@ import { SessionRegistry } from "./lib/session-registry.js";
 import { MAX_REQUEST_BODY_BYTES } from "./lib/constants.js";
 import { log } from "./lib/logger.js";
 import { createMcpServer } from "./server.js";
+import { authFailures, sessionEvictions, sessionRefusals, sessionsActive, sessionsCreated } from "./lib/metrics.js";
+import { startMetricsServer } from "./metrics-server.js";
 
 export const HEALTH_PATH = "/healthz";
 export const READY_PATH = "/readyz";
@@ -130,9 +132,15 @@ export function createHttpHandler(
     now: options.now,
   });
 
+  // In-flight reserved slots count, matching how the caps count them.
+  const syncActive = () => sessionsActive.set(registry.size);
+
   // Periodic cleanup of idle sessions
   const cleanupInterval = setInterval(() => {
-    for (const { sid, value: transport } of registry.sweepIdle()) {
+    const expired = registry.sweepIdle();
+    syncActive();
+    for (const { sid, value: transport, reason } of expired) {
+      sessionEvictions.inc({ reason });
       transport.close().catch(() => {});
       log("info", "session_expired", {
         session_id: sid.slice(0, 8),
@@ -179,6 +187,7 @@ export function createHttpHandler(
     let parsedBody: unknown = undefined;
     let tenantHost: string | undefined;
     let logged = false;
+    let shutdownRefusal = false;
     const emitAccessLog = () => {
       if (logged) return;
       logged = true;
@@ -195,7 +204,7 @@ export function createHttpHandler(
       const xff = req.headers["x-forwarded-for"];
       const xffFirst = Array.isArray(xff) ? xff[0] : (typeof xff === "string" ? xff.split(",")[0]?.trim() : undefined);
       const { mcpMethod, toolName } = extractMcpFields(parsedBody);
-      const level = status >= 500 ? "error" : status >= 400 ? "warn" : "info";
+      const level = shutdownRefusal ? "info" : status >= 500 ? "error" : status >= 400 ? "warn" : "info";
       log(level, "request", {
         method: req.method,
         path: url.pathname,
@@ -219,6 +228,7 @@ export function createHttpHandler(
     // Auth gate — must run before body parsing or session lookup.
     const authResult = checkAuth(authConfig, req.headers);
     if (!authResult.ok) {
+      authFailures.inc({ reason: authResult.reason === "missing" ? "auth_header_missing" : "auth_header_mismatch" });
       log("warn", "auth_failed", {
         reason: authResult.reason,
         peer_ip: peerIp,
@@ -235,6 +245,7 @@ export function createHttpHandler(
     if (hosted) {
       const creds = parseCredentialHeaders(req.headers, allowedDomains);
       if (!creds.ok) {
+        authFailures.inc({ reason: creds.reason });
         log("warn", "auth_failed", { reason: creds.reason, peer_ip: peerIp });
         sendJson(res, 401, { error: "unauthorized", reason: creds.reason });
         return;
@@ -258,6 +269,7 @@ export function createHttpHandler(
         return undefined;
       }
       if (hosted && entry.fingerprint !== fingerprint) {
+        authFailures.inc({ reason: "session_credential_mismatch" });
         log("warn", "auth_failed", {
           reason: "session_credential_mismatch",
           peer_ip: peerIp,
@@ -319,12 +331,15 @@ export function createHttpHandler(
       // New initialization request
       if (!sessionId && isInitializeRequest(body)) {
         if (shuttingDown) {
+          sessionRefusals.inc({ reason: "shutting_down" });
+          shutdownRefusal = true;
           sendJson(res, 503, { error: "shutting_down" });
           return;
         }
         if (hosted) {
           const check = await verifyCredentials(tenant!);
           if (!check.ok) {
+            authFailures.inc({ reason: check.reason });
             log("warn", "auth_failed", {
               reason: check.reason,
               peer_ip: peerIp,
@@ -341,6 +356,7 @@ export function createHttpHandler(
         // transport assigns it during handleRequest.
         const admission = registry.admit(fingerprint);
         if (!admission.ok) {
+          sessionRefusals.inc({ reason: admission.reason });
           log("warn", "session_refused", { reason: admission.reason, peer_ip: peerIp });
           res.setHeader("Retry-After", String(Math.max(1, Math.ceil(admission.retryAfterMs / 1000))));
           if (admission.reason === "per_credential_cap") sendJson(res, 429, { error: "too_many_sessions" });
@@ -348,6 +364,7 @@ export function createHttpHandler(
           return;
         }
         for (const victim of admission.evicted) {
+          sessionEvictions.inc({ reason: victim.reason });
           victim.value.close().catch(() => {});
           log("info", "session_evicted", { session_id: victim.sid.slice(0, 8), reason: victim.reason });
         }
@@ -355,13 +372,16 @@ export function createHttpHandler(
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSid,
           onsessioninitialized: (sid) => {
+            sessionsCreated.inc();
             log("info", "session_created", { session_id: sid.slice(0, 8) });
           },
         });
         registry.add(newSid, fingerprint, transport);
+        syncActive();
 
         transport.onclose = () => {
           registry.remove(newSid);
+          syncActive();
           if (transport.sessionId) log("info", "session_closed", { session_id: newSid.slice(0, 8) });
         };
 
@@ -372,6 +392,7 @@ export function createHttpHandler(
         } finally {
           // The transport rejected the initialize (e.g. bad Accept header): release the slot.
           if (transport.sessionId !== newSid && registry.remove(newSid)) {
+            syncActive();
             transport.close().catch(() => {});
           }
         }
@@ -410,6 +431,7 @@ export function createHttpHandler(
     for (const [sid, transport] of [...registry.entries()]) {
       await transport.close();
       registry.remove(sid);
+      syncActive();
     }
   };
 
@@ -425,7 +447,19 @@ export function createHttpHandler(
  */
 export async function startHttp(config: ServerConfig, index: OperationsIndex, authConfig: AuthConfig): Promise<void> {
   const port = parseInt(process.env.MCP_HTTP_PORT || "3000", 10);
-  const { handler, close, drain } = createHttpHandler(config, index, authConfig);
+  // Fatal if the port is taken: main() reports the rejection and exits 1.
+  const metricsServer = config.metricsPort !== undefined ? await startMetricsServer(config.metricsPort) : undefined;
+  if (metricsServer) log("info", "metrics_listening", { port: config.metricsPort, path: "/metrics" });
+  const { handler, close: closeSessions, drain } = createHttpHandler(config, index, authConfig);
+  // The metrics server keeps answering through the drain window and closes with the sessions.
+  const close = async () => {
+    const results = await Promise.allSettled([
+      closeSessions(),
+      metricsServer ? closeServer(metricsServer) : Promise.resolve(),
+    ]);
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+  };
   const httpServer = createServer((req, res) => {
     handler(req, res).catch((err) => {
       log("error", "request_failed", { error: err instanceof Error ? err.message : String(err) });
@@ -442,6 +476,13 @@ export async function startHttp(config: ServerConfig, index: OperationsIndex, au
   const shutdown = createShutdown({ httpServer, close, beginDrain: drain, drainMs: config.shutdownDrainMs ?? 0 });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+    server.closeAllConnections();
+  });
 }
 
 /**

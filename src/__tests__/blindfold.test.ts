@@ -108,6 +108,9 @@ describe("blindfoldEncrypt", () => {
   });
 });
 
+const jsonRes = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+const errRes = (status: number, statusText: string) => new Response("{}", { status, statusText });
+
 describe("fetchBlindfoldParams", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -115,21 +118,15 @@ describe("fetchBlindfoldParams", () => {
 
   it("calls correct API endpoints and maps response fields", async () => {
     const mockFetch = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      .mockResolvedValueOnce(jsonRes({
           data: { policy_id: 42, tenant: "my-tenant" },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+        }))
+      .mockResolvedValueOnce(jsonRes({
           data: {
             modulus_base64: "bW9kLWRhdGE=",
             public_exponent_base64: "AQAB",
           },
-        }),
-      });
+        }));
 
     vi.stubGlobal("fetch", mockFetch);
 
@@ -158,8 +155,8 @@ describe("fetchBlindfoldParams", () => {
 
   it("throws on policy fetch failure", async () => {
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: {} }) }),
+      .mockResolvedValueOnce(errRes(403, "Forbidden"))
+      .mockResolvedValueOnce(jsonRes({ data: {} })),
     );
 
     await expect(
@@ -173,11 +170,8 @@ describe("fetchBlindfoldParams", () => {
 
   it("throws on public key fetch failure", async () => {
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: { policy_id: 1, tenant: "t" } }),
-      })
-      .mockResolvedValueOnce({ ok: false, status: 500, statusText: "Internal Server Error" }),
+      .mockResolvedValueOnce(jsonRes({ data: { policy_id: 1, tenant: "t" } }))
+      .mockResolvedValueOnce(errRes(500, "Internal Server Error")),
     );
 
     await expect(
@@ -192,16 +186,10 @@ describe("fetchBlindfoldParams", () => {
   it("uses mTLS dispatcher and omits Authorization header for P12 tenants", async () => {
     const stubDispatcher = { stub: "dispatcher" };
     const mockFetch = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: { policy_id: 7, tenant: "t" } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      .mockResolvedValueOnce(jsonRes({ data: { policy_id: 7, tenant: "t" } }))
+      .mockResolvedValueOnce(jsonRes({
           data: { modulus_base64: "bQ==", public_exponent_base64: "AQAB" },
-        }),
-      });
+        }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchBlindfoldParams({
