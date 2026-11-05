@@ -41,6 +41,8 @@ describe("handleQueryAccessLogs", () => {
     });
 
     const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.query).toBe('{vh_name="ves-io-http-loadbalancer-lb",rsp_code_class="5xx"}');
+    expect(mockCallApi.mock.calls[0][3].body.query).toBe(parsed.query);
     expect(parsed.entries).toBe(2);
     expect(parsed.entries_data).toHaveLength(2);
     expect(parsed.entries_data[0].rsp_code).toBe(500);

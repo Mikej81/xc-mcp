@@ -345,6 +345,24 @@ describe("filterResponse", () => {
     expect((filtered as any).items).toEqual([{ name: "a" }, { name: "b" }]);
   });
 
+  it("keeps every field when several paths go through the same array", () => {
+    const body = { items: [{ name: "a", get_spec: { user_name: "u1", x: 1 } }, { name: "b", get_spec: { user_name: "u2" } }] };
+    const { filtered } = filterResponse(body, "items[].name,items[].get_spec.user_name");
+    expect(filtered).toEqual({ items: [{ name: "a", get_spec: { user_name: "u1" } }, { name: "b", get_spec: { user_name: "u2" } }] });
+  });
+
+  it("keeps every field for nested arrays reached through an object", () => {
+    const body = { spec: { list: [{ a: 1, b: null, c: 3 }, { a: 2, b: "x", c: 4 }] } };
+    const { filtered } = filterResponse(body, "spec.list[].a,spec.list[].b");
+    expect(filtered).toEqual({ spec: { list: [{ a: 1, b: null }, { a: 2, b: "x" }] } });
+  });
+
+  it("keeps earlier array fields when a later path matches nothing", () => {
+    const { filtered, matchedAny } = filterResponse(data, "items[].name,items[].missing");
+    expect(filtered).toEqual({ items: [{ name: "a" }, { name: "b" }] });
+    expect(matchedAny).toBe(true);
+  });
+
   it("returns body unchanged when filter is empty", () => {
     const { filtered } = filterResponse(data, "");
     expect(filtered).toEqual(data);

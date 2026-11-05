@@ -326,6 +326,8 @@ MCP_AUTH_HEADER_NAME=X-API-Key
 MCP_AUTH_HEADER_VALUE=<long-random-secret>
 ```
 
+Clients hold the `GET /mcp` SSE stream open, so raise the idle timeout of any proxy in front of the server. Behind an F5 XC load balancer, that is the origin pool's `spec.advanced_options.http_idle_timeout`, which XC caps at 600000 ms (10 minutes). Streams idle longer than that are closed and the client reconnects.
+
 The check runs before body parsing, so failed requests never create a session. Failed auth events are logged at `warn` level with the peer IP and the expected header name (the supplied value is never logged).
 
 Configure your client (Bifrost, ChatGPT connector, etc.) to send the matching header on every request to `/mcp`.
@@ -378,6 +380,12 @@ XC_HOSTED_ALLOWED_DOMAINS=.console.ves.volterra.io,.<your-fedramp-domain>
 The server refuses to start if `MCP_MODE=hosted` is set without `MCP_TRANSPORT=http`, or if any `XC_API_TOKEN`, `XC_TENANT_URL`, `XC_API_P12_*` or `XC_TENANT_<NAME>_*` variable is set. Hosted mode never reads tenant credentials from the environment.
 
 `XC_HOSTED_ALLOWED_DOMAINS` is a comma-separated list of domain suffixes. A leading dot is added if you leave it out. A tenant URL must be `https://<tenant><suffix>`, with exactly one label in front of the suffix. FedRAMP tenants live outside `ves.volterra.io`, so add their domain here. Anything off the list gets a 401.
+
+To serve commercial and FedRAMP tenants from one server, list each console suffix, keeping the commercial one:
+
+```bash
+XC_HOSTED_ALLOWED_DOMAINS=.console.ves.volterra.io,.console.<fedramp-domain>,.console.<fedramp-staging-domain>
+```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -635,7 +643,7 @@ npm run download-specs   # Download 268 OpenAPI specs from F5
 npm run build:index      # Parse specs into searchable index
 npm run build:ts         # Compile TypeScript
 npm run build            # All of the above
-npm test                 # Run 516 unit tests
+npm test                 # Run 523 unit tests
 npm run test:watch       # Run tests in watch mode
 ```
 

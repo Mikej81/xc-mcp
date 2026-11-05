@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.2 -- 2026-11-05
+
+### Fixes for access-log, filter and diff results
+
+Three tools returned successful but wrong results with no warning, and `xc_diff_resource` reported changes that did not exist. No breaking changes. Drop-in upgrade from 0.6.1.
+
+- **Fix: `xc_query_lb_metrics` always returned no buckets** -- it read entries from `data`, but the XC `access_logs` API returns them under `logs`, so every query came back as `"buckets": []` and looked like an LB with no traffic. It now reads `logs`.
+- **Fix: `xc_query_access_logs` `lb_name` matched nothing** -- XC labels HTTP LB access logs `vh_name="ves-io-http-loadbalancer-<name>"`, and the tool sent the bare name, so it always returned 0 entries. Both access-log tools now build the label with one helper that adds the prefix, and they accept the name with or without it.
+- **Fix: `xc_call_api` `response_filter` dropped fields** -- when several comma-separated paths went through the same array (`items[].name,items[].get_spec.user_name`), each path replaced the array the previous one built, so only the last path's fields survived. If the last path matched nothing, every item came back as `{}` with no `filter_warning`. Paths that share a prefix are now merged element by element.
+- **Fix: `xc_diff_resource` reported the GET envelope as changes** -- a single-object GET also returns `create_form`, `replace_form`, `resource_version`, `referring_objects`, `deleted_referred_objects` and `disabled_referred_objects`. The diff listed each one as a removal, so an identical body showed `unchanged: false`. The diff now compares only `metadata` (`name`, `namespace`, `labels`, `annotations`, `description`, `disable`) and `spec`. `xc_patch_resource` and the PUT path are unchanged.
+- **Docs: F5 XC vK8s** -- vK8s admission rejects `runAsUser` in a container security context. `deploy/k8s/` now says to delete the `runAsNonRoot` and `runAsUser` lines on vK8s; the image still runs as uid 1001.
+- **Docs: SSE behind an F5 XC load balancer** -- the origin pool `http_idle_timeout` is capped at 600000 ms, so idle SSE streams close after 10 minutes and the client reconnects.
+- **Docs: FedRAMP domains** -- the README shows how to list several console suffixes in `XC_HOSTED_ALLOWED_DOMAINS` to serve commercial and FedRAMP tenants from one server.
+- **Unit tests** -- 523 tests across 42 test files (up from 516). The access-log fixtures now use the real response shape, and the tests assert the generated query.
+
 ## 0.6.1 -- 2026-11-05
 
 ### Metrics, audit log and a Kubernetes example

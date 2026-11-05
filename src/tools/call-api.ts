@@ -3,6 +3,25 @@ import { callApi } from "../lib/api-client.js";
 import { encodePemFields } from "../lib/pem-encoding.js";
 import { MAX_TOOL_OUTPUT } from "../lib/constants.js";
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Merge two filtered fragments so paths that share a prefix keep each other's fields. */
+function mergeFiltered(prev: unknown, next: unknown): unknown {
+  if (isPlainObject(prev) && isPlainObject(next)) {
+    const out: Record<string, unknown> = { ...prev };
+    for (const [k, v] of Object.entries(next)) {
+      out[k] = k in out ? mergeFiltered(out[k], v) : v;
+    }
+    return out;
+  }
+  if (Array.isArray(prev) && Array.isArray(next) && prev.length === next.length) {
+    return prev.map((p, i) => mergeFiltered(p, next[i]));
+  }
+  return next === undefined ? prev : next;
+}
+
 /**
  * Extract fields from a response body using dot-separated paths.
  * Supports comma-separated field list, e.g. "items[].name,items[].labels"
@@ -31,18 +50,16 @@ export function filterResponse(body: unknown, filter: string): { filtered: unkno
       if (source == null || typeof source !== "object") break;
 
       if (isLast) {
-        if (isArrayAccess && Array.isArray(source[key])) {
-          target[key] = source[key];
-          matchedAny = true;
-        } else if (source[key] !== undefined) {
-          target[key] = source[key];
+        if (source[key] !== undefined) {
+          target[key] = target[key] === undefined ? source[key] : mergeFiltered(target[key], source[key]);
           matchedAny = true;
         }
       } else {
         if (isArrayAccess && Array.isArray(source[key])) {
           const remaining = parts.slice(i + 1).join(".");
           const inner = source[key].map((item: any) => filterResponse(item, remaining));
-          target[key] = inner.map((r: { filtered: unknown }) => r.filtered);
+          const next = inner.map((r: { filtered: unknown }) => r.filtered);
+          target[key] = target[key] === undefined ? next : mergeFiltered(target[key], next);
           if (inner.some((r: { matchedAny: boolean }) => r.matchedAny)) matchedAny = true;
           break;
         } else {

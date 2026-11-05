@@ -44,6 +44,53 @@ describe("handleDiffResource", () => {
     expect(parsed.patch).toEqual([]);
   });
 
+  it("ignores the GET envelope (create_form, referring_objects, ...) for an identical body", async () => {
+    const metadata = { name: "pool1", namespace: "ns1", labels: { a: "b" }, annotations: {}, description: "d", disable: false };
+    const spec = { origin_servers: [{ public_name: { dns_name: "x.example.com" } }], port: 443 };
+    mockCallApi.mockResolvedValueOnce({
+      status: 200, statusText: "OK", headers: {},
+      body: {
+        object: null,
+        create_form: { metadata: {}, spec: {} },
+        replace_form: { metadata: {}, spec: {} },
+        resource_version: "12345",
+        metadata: { ...metadata, uid: "u-1" },
+        system_metadata: { tenant: "t", uid: "u-1", creation_timestamp: "2026-11-05T00:00:00Z" },
+        spec,
+        status: [],
+        referring_objects: [{ kind: "http_loadbalancer", name: "lb1" }],
+        deleted_referred_objects: [],
+        disabled_referred_objects: [],
+      },
+    });
+
+    const result = await handleDiffResource(config, {
+      resource: "origin_pools/ns1/pool1",
+      body: { metadata, spec },
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.patch).toEqual([]);
+    expect(parsed.unchanged).toBe(true);
+  });
+
+  it("still reports a real metadata change next to the envelope", async () => {
+    mockCallApi.mockResolvedValueOnce({
+      status: 200, statusText: "OK", headers: {},
+      body: {
+        create_form: {}, resource_version: "1", referring_objects: [],
+        metadata: { name: "pool1", namespace: "ns1", labels: { env: "prod" } },
+        spec: { port: 443 },
+      },
+    });
+    const result = await handleDiffResource(config, {
+      resource: "origin_pools/ns1/pool1",
+      body: { metadata: { name: "pool1", namespace: "ns1", labels: { env: "dev" } }, spec: { port: 443 } },
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.patch).toEqual([{ op: "replace", path: "/metadata/labels/env", value: "dev" }]);
+  });
+
   it("returns patch ops for actual changes", async () => {
     mockCallApi.mockResolvedValueOnce({
       status: 200, statusText: "OK", headers: {},

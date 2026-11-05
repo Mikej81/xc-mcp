@@ -4,7 +4,7 @@ This directory has a minimal setup for running xc-mcp in hosted mode on Kubernet
 
 Files:
 
-- `deployment.yaml`: one replica of `ghcr.io/mikej81/xc-mcp:0.6.1`, with probes, a non-root security context, a read-only root filesystem and resource limits.
+- `deployment.yaml`: one replica of `ghcr.io/mikej81/xc-mcp:0.6.2`, with probes, a non-root security context, a read-only root filesystem and resource limits.
 - `service.yaml`: a ClusterIP Service with port `http` (3000) and port `metrics` (9090).
 - `ingress.yaml`: exposes only `/mcp` on a placeholder host with a placeholder TLS secret.
 
@@ -17,7 +17,7 @@ Files:
    kubectl create secret generic xc-mcp-auth --from-literal=value="$(openssl rand -hex 32)"
    ```
 
-3. Optional: uncomment `XC_HOSTED_ALLOWED_DOMAINS` to allow tenant domains beyond `.console.ves.volterra.io`, such as a FedRAMP domain.
+3. Optional: uncomment `XC_HOSTED_ALLOWED_DOMAINS` to allow tenant domains beyond `.console.ves.volterra.io`, such as a FedRAMP domain. The main README shows the format for listing several suffixes.
 4. Check the manifests without changing anything, then apply them:
 
    ```
@@ -49,6 +49,12 @@ Hosted-mode sessions live in the memory of one pod. After `initialize`, every la
 ## Long-lived streams
 
 MCP clients hold Server-Sent Events streams open. Most ingress controllers close idle connections after about 60 seconds. `ingress.yaml` has a commented example of NGINX annotations that raise the read and send timeouts and turn off buffering. Other controllers have their own settings.
+
+Behind an F5 XC load balancer, the origin pool's `spec.advanced_options.http_idle_timeout` sets the idle limit. XC rejects values above 600000 ms (10 minutes), so a stream idle for longer than that is closed. Clients reconnect, so set it to 600000 and expect a reconnect after 10 idle minutes.
+
+## F5 XC vK8s
+
+XC vK8s admission rejects a container `securityContext` that sets `runAsUser`, with `Container xc-mcp SecurityContext RunAsUser is not allowed`. Delete the `runAsNonRoot` and `runAsUser` lines from `deployment.yaml` before you apply it to vK8s. The image sets `USER appuser`, so the server still runs as uid 1001, not root.
 
 ## Shutdown timing
 
